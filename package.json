@@ -1,0 +1,54 @@
+{
+  "name": "central-server",
+  "version": "1.0.0",
+  "description": "Louaj Central Server - PostgreSQL backend for the public transportation management system",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "nodemon --exec ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:seed": "ts-node prisma/seed.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "typescript",
+    "express",
+    "prisma",
+    "postgresql",
+    "transportation",
+    "tunisia"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^24.0.3",
+    "@types/socket.io": "^3.0.1",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.9.0",
+    "@types/node-cron": "^3.0.11",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "express-validator": "^7.2.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "node-cron": "^4.1.1",
+    "prisma": "^6.9.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "twilio": "^5.4.0"
+  }
+}

@@ -1,0 +1,378 @@
+// central-server/prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============== USER MANAGEMENT ===============
+
+model User {
+  id              String   @id @default(cuid())
+  phoneNumber     String   @unique @map("phone_number")
+  email           String?
+  firstName       String   @map("first_name")
+  lastName        String   @map("last_name")
+  isVerified      Boolean  @default(false) @map("is_verified")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  bookings        Booking[]
+  
+  @@map("users")
+}
+
+// =============== GEOGRAPHIC & STATIONS ===============
+
+model Governorate {
+  id            String      @id @default(cuid())
+  name          String      @unique
+  nameAr        String?     @map("name_ar")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  
+  // Relations
+  delegations   Delegation[]
+  stations      Station[]
+  drivers       Driver[]    // Drivers from this governorate
+  
+  @@map("governorates")
+}
+
+model Delegation {
+  id              String      @id @default(cuid())
+  name            String
+  nameAr          String?     @map("name_ar")
+  governorateId   String      @map("governorate_id")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  
+  // Relations
+  governorate     Governorate @relation(fields: [governorateId], references: [id])
+  stations        Station[]
+  drivers         Driver[]    // Drivers from this delegation
+  
+  @@map("delegations")
+}
+
+model Station {
+  id              String      @id @default(cuid())
+  name            String
+  nameAr          String?     @map("name_ar")
+  governorateId   String      @map("governorate_id")
+  delegationId    String      @map("delegation_id")
+  address         String?
+  latitude        Float?
+  longitude       Float?
+  localServerIp   String?     @map("local_server_ip")
+  supervisorId    String?     @unique @map("supervisor_id") // One supervisor per station
+  isActive        Boolean     @default(true) @map("is_active")
+  isOnline        Boolean     @default(true) @map("is_online")
+  lastHeartbeat   DateTime?   @map("last_heartbeat")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  
+  // Relations
+  governorate       Governorate               @relation(fields: [governorateId], references: [id])
+  delegation        Delegation                @relation(fields: [delegationId], references: [id])
+  supervisor        Staff?                    @relation("StationSupervisor", fields: [supervisorId], references: [id])
+  staff             Staff[]                   @relation("StationStaff")
+  assignedDrivers   Driver[]                  // Drivers assigned to this station
+  departureRoutes   Route[]                   @relation("DepartureStation")
+  arrivalRoutes     Route[]                   @relation("ArrivalStation")
+  bookings          Booking[]
+  syncLogs          SyncLog[]
+  queueEntries      VehicleQueue[]
+  queueDestinations VehicleQueue[]            @relation("QueueDestination")
+  authorizedVehicles VehicleAuthorizedStation[] // Vehicles authorized to operate from this station
+  
+  @@map("stations")
+}
+
+// =============== STAFF MANAGEMENT ===============
+
+model Staff {
+  id            String     @id @default(cuid())
+  cin           String     @unique
+  phoneNumber   String     @map("phone_number")
+  firstName     String     @map("first_name")
+  lastName      String     @map("last_name")
+  role          StaffRole  @default(WORKER)
+  stationId     String?    @map("station_id") // Optional for ADMIN role
+  isActive      Boolean    @default(true) @map("is_active")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  createdBy     String?    @map("created_by")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+  
+  // Relations
+  station             Station?   @relation("StationStaff", fields: [stationId], references: [id])
+  supervisingStation  Station?   @relation("StationSupervisor") // One-to-one: supervisor manages one station
+  approvedDrivers     Driver[]   // Drivers approved by this staff member
+  bookings            Booking[]  @relation("BookingStaff")
+  verifications       Booking[]  @relation("VerificationStaff")
+  
+  @@map("staff")
+}
+
+enum StaffRole {
+  WORKER
+  SUPERVISOR
+  ADMIN
+  DRIVER
+}
+
+// =============== VEHICLES & DRIVERS ===============
+
+model Driver {
+  id              String            @id @default(cuid())
+  cin             String            @unique
+  phoneNumber     String            @map("phone_number")
+  firstName       String            @map("first_name")
+  lastName        String            @map("last_name")
+  
+  // Origin location info
+  originGovernorateId String        @map("origin_governorate_id")
+  originDelegationId  String        @map("origin_delegation_id")
+  originAddress       String?       @map("origin_address")
+  
+  // Assigned station (closest to origin)
+  assignedStationId   String?       @map("assigned_station_id")
+  
+  // Account status
+  accountStatus       DriverStatus  @default(PENDING) @map("account_status")
+  isActive            Boolean       @default(false) @map("is_active") // Only active after approval
+  approvedBy          String?       @map("approved_by") // Supervisor who approved
+  approvedAt          DateTime?     @map("approved_at")
+  rejectionReason     String?       @map("rejection_reason")
+  
+  // Vehicle relationship (one-to-one)
+  vehicleId           String?       @unique @map("vehicle_id")
+  
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+  
+  // Relations
+  originGovernorate   Governorate   @relation(fields: [originGovernorateId], references: [id])
+  originDelegation    Delegation    @relation(fields: [originDelegationId], references: [id])
+  assignedStation     Station?      @relation(fields: [assignedStationId], references: [id])
+  vehicle             Vehicle?      @relation(fields: [vehicleId], references: [id])
+  approvedByStaff     Staff?        @relation(fields: [approvedBy], references: [id])
+  
+  @@map("drivers")
+}
+
+enum DriverStatus {
+  PENDING     // Waiting for supervisor approval
+  APPROVED    // Approved by supervisor
+  REJECTED    // Rejected by supervisor
+  SUSPENDED   // Temporarily suspended
+}
+
+model Vehicle {
+  id              String            @id @default(cuid())
+  licensePlate    String            @unique @map("license_plate")
+  capacity        Int
+  model           String?
+  year            Int?
+  color           String?
+  
+  // Vehicle status
+  isActive        Boolean           @default(false) @map("is_active") // Only active after driver approval
+  isAvailable     Boolean           @default(true) @map("is_available") // Available for trips
+  
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  
+  // Relations (one-to-one with driver)
+  driver              Driver?                     @relation() // One vehicle has one driver
+  queueEntries        VehicleQueue[]              // Vehicle can be in multiple queues over time
+  authorizedStations  VehicleAuthorizedStation[]  // Stations this vehicle can operate between
+  
+  @@map("vehicles")
+}
+
+// Junction table for Vehicle-Station many-to-many relationship
+model VehicleAuthorizedStation {
+  id        String   @id @default(cuid())
+  vehicleId String   @map("vehicle_id")
+  stationId String   @map("station_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  // Relations
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  
+  // Prevent duplicate entries
+  @@unique([vehicleId, stationId])
+  @@map("vehicle_authorized_stations")
+}
+
+// =============== SIMPLIFIED VEHICLE QUEUE SYSTEM ===============
+// One table that handles BOTH queue position AND booking schedule
+
+model VehicleQueue {
+  id              String      @id @default(cuid())
+  vehicleId       String      @map("vehicle_id")
+  stationId       String      @map("station_id")         // Current station (Monastir)
+  destinationId   String      @map("destination_id")     // Destination (Tunis, Gafsa, etc.)
+  
+  // QUEUE MANAGEMENT
+  queueType       QueueType   @default(REGULAR)
+  queuePosition   Int         @map("queue_position")     // Position within destination queue
+  status          QueueStatus @default(WAITING) 
+  enteredAt       DateTime    @default(now()) @map("entered_at")
+  
+  // SCHEDULE & BOOKING INFO (merged from VehicleSchedule)
+  availableSeats  Int         @map("available_seats")    // Seats available for booking
+  totalSeats      Int         @map("total_seats")        // Vehicle capacity
+  basePrice       Decimal     @db.Decimal(10, 2) @map("base_price") // Price per seat
+  estimatedDeparture DateTime? @map("estimated_departure") // When vehicle plans to leave
+  actualDeparture DateTime?   @map("actual_departure")    // When vehicle actually left
+  
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  
+  // Relations
+  vehicle         Vehicle     @relation(fields: [vehicleId], references: [id])
+  station         Station     @relation(fields: [stationId], references: [id])
+  destination     Station     @relation("QueueDestination", fields: [destinationId], references: [id])
+  bookings        Booking[]   // Customers book directly on queue entries
+  
+  // Each destination has its own independent queue positions
+  @@unique([stationId, destinationId, queuePosition]) 
+  @@map("vehicle_queue")
+}
+
+enum QueueType {
+  OVERNIGHT   // Priority queue - gets positions 1, 2, 3... first
+  REGULAR     // Regular queue - gets positions after overnight vehicles
+}
+
+enum QueueStatus {
+  WAITING     // In queue, waiting for passengers
+  LOADING     // Currently accepting passengers (front of queue)
+  READY       // Full or ready to depart
+  DEPARTED    // Left the station
+}
+
+// =============== ROUTES & SCHEDULES ===============
+
+model Route {
+  id                    String            @id @default(cuid())
+  departureStationId    String            @map("departure_station_id")
+  destinationStationId  String            @map("destination_station_id")
+  basePrice             Decimal           @db.Decimal(10, 2) @map("base_price")
+  isActive              Boolean           @default(true) @map("is_active")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  
+  // Relations
+  departureStation      Station           @relation("DepartureStation", fields: [departureStationId], references: [id])
+  destinationStation    Station           @relation("ArrivalStation", fields: [destinationStationId], references: [id])
+  
+  @@map("routes")
+}
+
+// =============== BOOKINGS & PAYMENTS ===============
+
+model Booking {
+  id                String        @id @default(cuid())
+  userId            String?       @map("user_id") // Null for walk-in customers
+  queueId           String        @map("queue_id") // Reference to VehicleQueue instead of schedule
+  stationId         String        @map("station_id") // Station where booking was made
+  seatsBooked       Int           @map("seats_booked")
+  totalAmount       Decimal       @db.Decimal(10, 2) @map("total_amount")
+  bookingSource     BookingSource @map("booking_source")
+  
+  // Customer info for walk-ins (no CIN required)
+  customerName      String?       @map("customer_name")
+  customerPhone     String?       @map("customer_phone")
+  
+  // Payment
+  paymentStatus     PaymentStatus @default(PENDING) @map("payment_status")
+  paymentMethod     String?       @map("payment_method")
+  
+  // Verification
+  verificationCode  String        @unique @map("verification_code")
+  qrCode            String?       @map("qr_code")
+  isVerified        Boolean       @default(false) @map("is_verified")
+  verifiedAt        DateTime?     @map("verified_at")
+  verifiedById      String?       @map("verified_by_id")
+  
+  // Metadata
+  createdBy         String?       @map("created_by") // Staff ID for station bookings
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  
+  // Relations
+  user              User?         @relation(fields: [userId], references: [id])
+  queue             VehicleQueue  @relation(fields: [queueId], references: [id])
+  station           Station       @relation(fields: [stationId], references: [id])
+  createdByStaff    Staff?        @relation("BookingStaff", fields: [createdBy], references: [id])
+  verifiedByStaff   Staff?        @relation("VerificationStaff", fields: [verifiedById], references: [id])
+  payments          Payment[]
+  
+  @@map("bookings")
+}
+
+enum BookingSource {
+  MOBILE
+  STATION
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  bookingId         String        @map("booking_id")
+  amount            Decimal       @db.Decimal(10, 2)
+  paymentMethod     String        @map("payment_method") // 'konnect', 'cash', etc.
+  paymentReference  String?       @map("payment_reference") // Konnect transaction ID
+  status            PaymentStatus @default(PENDING)
+  processedAt       DateTime?     @map("processed_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  
+  // Relations
+  booking           Booking       @relation(fields: [bookingId], references: [id])
+  
+  @@map("payments")
+}
+
+// =============== SYNC MANAGEMENT ===============
+
+model SyncLog {
+  id          String      @id @default(cuid())
+  stationId   String      @map("station_id")
+  tableName   String      @map("table_name")
+  recordId    String      @map("record_id")
+  operation   SyncOperation
+  data        Json
+  syncStatus  SyncStatus  @default(PENDING) @map("sync_status")
+  retryCount  Int         @default(0) @map("retry_count")
+  error       String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+  syncedAt    DateTime?   @map("synced_at")
+  
+  // Relations
+  station     Station     @relation(fields: [stationId], references: [id])
+  
+  @@map("sync_logs")
+}
+
+enum SyncOperation {
+  INSERT
+  UPDATE
+  DELETE
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+} 
