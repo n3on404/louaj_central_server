@@ -41,7 +41,7 @@ class AuthService {
   private sessionDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
 
   constructor() {
-    this.jwtSecret = process.env.JWT_SECRET || 'louaj-dev-secret-key-change-in-production';
+    this.jwtSecret = process.env.JWT_SECRET || '125169cc5d865676c9b13ec2df5926cc942ff45e84eb931d6e2cef2940f8efbc';
     
     if (!process.env.JWT_SECRET) {
       console.warn('⚠️  Using default JWT secret. Set JWT_SECRET in production!');

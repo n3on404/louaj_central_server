@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth';
+import { userService } from '../services/user';
 
-// Extend Express Request interface to include staff info
+// Extend Express Request interface to include staff and user info
 declare global {
   namespace Express {
     interface Request {
@@ -20,6 +21,14 @@ declare global {
           address?: string;
           isOnline: boolean;
         };
+      };
+      user?: {
+        id: string;
+        phoneNumber: string;
+        firstName: string;
+        lastName: string;
+        email?: string;
+        isVerified: boolean;
       };
     }
   }
@@ -59,6 +68,61 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     next();
   } catch (error: any) {
     console.error('❌ Authentication middleware error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Authentication error',
+      code: 'AUTH_ERROR'
+    });
+  }
+};
+
+/**
+ * Middleware to authenticate user requests using JWT token
+ */
+export const authenticateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      res.status(401).json({
+        success: false,
+        message: 'Access denied. No token provided.',
+        code: 'NO_TOKEN'
+      });
+      return;
+    }
+
+    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+    
+    const verificationResult = await userService.verifyToken(token);
+    
+    if (!verificationResult.success || !verificationResult.user) {
+      res.status(401).json({
+        success: false,
+        message: verificationResult.error || 'Invalid token',
+        code: 'INVALID_TOKEN'
+      });
+      return;
+    }
+
+    // Attach user info to request
+    const userInfo: any = {
+      id: verificationResult.user.id,
+      phoneNumber: verificationResult.user.phoneNumber,
+      firstName: verificationResult.user.firstName,
+      lastName: verificationResult.user.lastName,
+      isVerified: verificationResult.user.isVerified
+    };
+    
+    if (verificationResult.user.email) {
+      userInfo.email = verificationResult.user.email;
+    }
+    
+    req.user = userInfo;
+    
+    next();
+  } catch (error: any) {
+    console.error('❌ User authentication middleware error:', error);
     res.status(500).json({
       success: false,
       message: 'Authentication error',
@@ -435,4 +499,4 @@ setInterval(() => {
       smsAttempts.delete(key);
     }
   }
-}, 60000); // Cleanup every minute 
+}, 60000); // Cleanup every minute

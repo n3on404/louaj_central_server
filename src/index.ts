@@ -5,7 +5,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { PrismaClient } from '@prisma/client';
-import { initializeSocketIO } from './socket/socketConfig';
+import { CentralWebSocketServer } from './websocket/WebSocketServer';
 
 // Load environment variables
 dotenv.config();
@@ -18,8 +18,8 @@ const app: Application = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 5000;
 
-// Initialize Socket.IO
-const io = initializeSocketIO(httpServer);
+// Initialize WebSocket Server
+const wsServer = new CentralWebSocketServer(httpServer);
 
 // Middleware
 app.use(helmet()); // Security headers
@@ -59,9 +59,9 @@ app.get('/api/v1', (_req: Request, res: Response) => {
     message: 'Welcome to Louaj Central Server API',
     version: '1.0.0',
     documentation: '/api/v1/docs',
-    socketIO: {
-      endpoint: `ws://localhost:${PORT}`,
-      events: ['authenticate', 'heartbeat', 'stationStatusUpdate'],
+    websocket: {
+      endpoint: `ws://localhost:${PORT}/ws`,
+      events: ['authenticate', 'heartbeat', 'connection_test', 'sync_request', 'data_update'],
       status: 'active'
     },
     endpoints: {
@@ -71,23 +71,51 @@ app.get('/api/v1', (_req: Request, res: Response) => {
       stations: '/api/v1/stations',
       vehicles: '/api/v1/vehicles',
       bookings: '/api/v1/bookings',
-      queue: '/api/v1/queue'
+      queue: '/api/v1/queue',
+      users: '/api/v1/users'
     }
   });
 });
 
-// Socket.IO status endpoint
-app.get('/api/v1/socket/status', (_req: Request, res: Response) => {
-  const connectedSockets = io.engine.clientsCount;
-  const rooms = Array.from(io.sockets.adapter.rooms.keys()).filter(room => room.startsWith('station:'));
+// WebSocket status endpoint
+app.get('/api/v1/socket/status', async (_req: Request, res: Response) => {
+  try {
+    const connectedClients = wsServer.getClientCount();
+    const authenticatedStations = wsServer.getAuthenticatedStations();
+    const stationStatusFromDB = await wsServer.getStationStatus();
   
   res.json({
     status: 'active',
-    connectedClients: connectedSockets,
-    activeStationRooms: rooms.length,
-    stationRooms: rooms,
+      connectedClients,
+      authenticatedStations: authenticatedStations.length,
+      webSocketClients: authenticatedStations.map(station => ({
+        clientId: station.id,
+        stationId: station.stationId,
+        stationName: station.stationName,
+        ipAddress: station.ipAddress,
+        connectionType: station.connectionType,
+        lastHeartbeat: station.lastHeartbeat.toISOString(),
+        connected: true
+      })),
+      databaseStatus: stationStatusFromDB.map((station: any) => ({
+        stationId: station.id,
+        stationName: station.name,
+        isActive: station.isActive,
+        isOnline: station.isOnline,
+        lastHeartbeat: station.lastHeartbeat?.toISOString() || null,
+        lastHeartbeatAge: station.lastHeartbeatAge,
+        connectedClients: station.connectedClients
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error getting WebSocket status:', error);
+    res.status(500).json({
+      error: 'Failed to get WebSocket status',
+      message: error instanceof Error ? error.message : 'Unknown error',
     timestamp: new Date().toISOString()
   });
+  }
 });
 
 // Import routes
@@ -95,6 +123,7 @@ import authRoutes from './routes/auth';
 import stationRoutes from './routes/stations';
 import vehicleRoutes from './routes/vehicle';
 import queueRoutes from './routes/queue';
+import userRoutes from './routes/user';
 // import bookingRoutes from './routes/bookings';
 
 // Use routes
@@ -102,6 +131,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/stations', stationRoutes);
 app.use('/api/v1/vehicles', vehicleRoutes);
 app.use('/api/v1/queue', queueRoutes);
+app.use('/api/v1/users', userRoutes);
 // app.use('/api/v1/bookings', bookingRoutes);
 
 // Error handling middleware
@@ -126,14 +156,28 @@ app.use((req: Request, res: Response) => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\nReceived SIGINT. Graceful shutdown...');
+  try {
+    await wsServer.close();
   await prisma.$disconnect();
+    console.log('✅ Graceful shutdown completed');
   process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during graceful shutdown:', error);
+    process.exit(1);
+  }
 });
 
 process.on('SIGTERM', async () => {
   console.log('\nReceived SIGTERM. Graceful shutdown...');
+  try {
+    await wsServer.close();
   await prisma.$disconnect();
+    console.log('✅ Graceful shutdown completed');
   process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during graceful shutdown:', error);
+    process.exit(1);
+  }
 });
 
 // Start server
@@ -141,7 +185,7 @@ httpServer.listen(PORT, () => {
   console.log(`Louaj Central Server is running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`API Documentation: http://localhost:${PORT}/api/v1`);
-  console.log(`Socket.IO endpoint: ws://localhost:${PORT}`);
+  console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 

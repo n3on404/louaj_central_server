@@ -152,7 +152,8 @@ export const getAllStations = async (req: Request, res: Response): Promise<void>
           _count: {
             select: {
               staff: true,
-              bookings: true,
+              departureBookings: true,
+              destinationBookings: true,
               queueEntries: true
             }
           }
@@ -223,7 +224,8 @@ export const getStationById = async (req: Request, res: Response): Promise<void>
         },
         _count: {
           select: {
-            bookings: true,
+            departureBookings: true,
+            destinationBookings: true,
             queueEntries: true,
             syncLogs: true
           }
@@ -351,7 +353,8 @@ export const deleteStation = async (req: Request, res: Response): Promise<void> 
         staff: true,
         _count: {
           select: {
-            bookings: true,
+            departureBookings: true,
+            destinationBookings: true,
             queueEntries: true
           }
         }
@@ -368,7 +371,7 @@ export const deleteStation = async (req: Request, res: Response): Promise<void> 
     }
 
     // Check if station has active bookings or queue entries
-    if (existingStation._count.bookings > 0 || existingStation._count.queueEntries > 0) {
+    if (existingStation._count.departureBookings > 0 || existingStation._count.destinationBookings > 0 || existingStation._count.queueEntries > 0) {
       res.status(400).json({
         success: false,
         message: 'Cannot delete station with active bookings or queue entries',
@@ -601,7 +604,8 @@ export const getMyStation = async (req: Request, res: Response): Promise<void> =
         },
         _count: {
           select: {
-            bookings: true,
+            departureBookings: true,
+            destinationBookings: true,
             queueEntries: true
           }
         }

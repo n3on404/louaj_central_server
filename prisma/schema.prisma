@@ -5,7 +5,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url      = "postgres://avnadmin:AVNS_7duJhhko0MWxBVavIhT@pg-louaj-louaj-app.g.aivencloud.com:23167/defaultdb?sslmode=require"
 }
 
 // =============== USER MANAGEMENT ===============
@@ -16,6 +16,7 @@ model User {
   email           String?
   firstName       String   @map("first_name")
   lastName        String   @map("last_name")
+  password        String   // Hashed password
   isVerified      Boolean  @default(false) @map("is_verified")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -82,7 +83,8 @@ model Station {
   assignedDrivers   Driver[]                  // Drivers assigned to this station
   departureRoutes   Route[]                   @relation("DepartureStation")
   arrivalRoutes     Route[]                   @relation("ArrivalStation")
-  bookings          Booking[]
+  departureBookings Booking[]                 @relation("DepartureStation")
+  destinationBookings Booking[]               @relation("ArrivalStation")
   syncLogs          SyncLog[]
   queueEntries      VehicleQueue[]
   queueDestinations VehicleQueue[]            @relation("QueueDestination")
@@ -110,8 +112,6 @@ model Staff {
   station             Station?   @relation("StationStaff", fields: [stationId], references: [id])
   supervisingStation  Station?   @relation("StationSupervisor") // One-to-one: supervisor manages one station
   approvedDrivers     Driver[]   // Drivers approved by this staff member
-  bookings            Booking[]  @relation("BookingStaff")
-  verifications       Booking[]  @relation("VerificationStaff")
   
   @@map("staff")
 }
@@ -238,7 +238,6 @@ model VehicleQueue {
   vehicle         Vehicle     @relation(fields: [vehicleId], references: [id])
   station         Station     @relation(fields: [stationId], references: [id])
   destination     Station     @relation("QueueDestination", fields: [destinationId], references: [id])
-  bookings        Booking[]   // Customers book directly on queue entries
   
   // Each destination has its own independent queue positions
   @@unique([stationId, destinationId, queuePosition]) 
@@ -277,73 +276,42 @@ model Route {
 // =============== BOOKINGS & PAYMENTS ===============
 
 model Booking {
-  id                String        @id @default(cuid())
-  userId            String?       @map("user_id") // Null for walk-in customers
-  queueId           String        @map("queue_id") // Reference to VehicleQueue instead of schedule
-  stationId         String        @map("station_id") // Station where booking was made
-  seatsBooked       Int           @map("seats_booked")
-  totalAmount       Decimal       @db.Decimal(10, 2) @map("total_amount")
-  bookingSource     BookingSource @map("booking_source")
+  id                   String        @id @default(cuid())
+  userId               String        @map("user_id")
+  departureStationId   String        @map("departure_station_id")
+  destinationStationId String        @map("destination_station_id")
+  seatsBooked          Int           @map("seats_booked")
+  totalAmount          Decimal       @db.Decimal(10, 2) @map("total_amount")
+  journeyDate          DateTime      @map("journey_date")
   
-  // Customer info for walk-ins (no CIN required)
-  customerName      String?       @map("customer_name")
-  customerPhone     String?       @map("customer_phone")
+  // Payment Information (embedded in booking)
+  paymentReference     String?       @unique @map("payment_reference") // Payment gateway transaction ID
+  paymentProcessedAt   DateTime?     @map("payment_processed_at") // When payment was completed
   
-  // Payment
-  paymentStatus     PaymentStatus @default(PENDING) @map("payment_status")
-  paymentMethod     String?       @map("payment_method")
-  
-  // Verification
-  verificationCode  String        @unique @map("verification_code")
-  qrCode            String?       @map("qr_code")
-  isVerified        Boolean       @default(false) @map("is_verified")
-  verifiedAt        DateTime?     @map("verified_at")
-  verifiedById      String?       @map("verified_by_id")
+  // Booking Management
+  verificationCode     String        @unique @map("verification_code")
+  status               BookingStatus @default(PENDING) @map("status")
   
   // Metadata
-  createdBy         String?       @map("created_by") // Staff ID for station bookings
-  createdAt         DateTime      @default(now()) @map("created_at")
-  updatedAt         DateTime      @updatedAt @map("updated_at")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
   
   // Relations
-  user              User?         @relation(fields: [userId], references: [id])
-  queue             VehicleQueue  @relation(fields: [queueId], references: [id])
-  station           Station       @relation(fields: [stationId], references: [id])
-  createdByStaff    Staff?        @relation("BookingStaff", fields: [createdBy], references: [id])
-  verifiedByStaff   Staff?        @relation("VerificationStaff", fields: [verifiedById], references: [id])
-  payments          Payment[]
+  user                 User          @relation(fields: [userId], references: [id])
+  departureStation     Station       @relation("DepartureStation", fields: [departureStationId], references: [id])
+  destinationStation   Station       @relation("ArrivalStation", fields: [destinationStationId], references: [id])
   
   @@map("bookings")
 }
 
-enum BookingSource {
-  MOBILE
-  STATION
+enum BookingStatus {
+  PENDING      // Booking created, payment pending
+  PAID         // Payment successful, booking confirmed
+  FAILED       // Payment failed
+  CANCELLED    // Booking cancelled by user
+  EXPIRED      // Booking expired (payment not completed in time)
+  REFUNDED     // Booking refunded
 }
-
-enum PaymentStatus {
-  PENDING
-  PAID
-  FAILED
-  REFUNDED
-}
-
-model Payment {
-  id                String        @id @default(cuid())
-  bookingId         String        @map("booking_id")
-  amount            Decimal       @db.Decimal(10, 2)
-  paymentMethod     String        @map("payment_method") // 'konnect', 'cash', etc.
-  paymentReference  String?       @map("payment_reference") // Konnect transaction ID
-  status            PaymentStatus @default(PENDING)
-  processedAt       DateTime?     @map("processed_at")
-  createdAt         DateTime      @default(now()) @map("created_at")
-  
-  // Relations
-  booking           Booking       @relation(fields: [bookingId], references: [id])
-  
-  @@map("payments")
-}
-
 // =============== SYNC MANAGEMENT ===============
 
 model SyncLog {

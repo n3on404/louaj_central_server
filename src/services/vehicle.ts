@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { CentralWebSocketServer } from '../websocket/WebSocketServer';
 
 const prisma = new PrismaClient();
 
@@ -330,6 +331,12 @@ export class VehicleService {
           isAvailable: true
         }
       });
+
+      // Broadcast vehicle update to authorized stations
+      const wsServer = CentralWebSocketServer.getInstance();
+      if (wsServer) {
+        await wsServer.broadcastVehicleUpdate(driver.vehicle.id, 'update');
+      }
     }
 
     return {
@@ -579,6 +586,14 @@ export class VehicleService {
       });
     });
 
+    // Broadcast vehicle update to authorized stations
+    if (updatedVehicle?.isActive) {
+      const wsServer = CentralWebSocketServer.getInstance();
+      if (wsServer) {
+        await wsServer.broadcastVehicleUpdate(vehicleId, 'update');
+      }
+    }
+
     return updatedVehicle;
   }
 
@@ -627,7 +642,15 @@ export class VehicleService {
       });
     });
 
-    return await this.getVehicleById(vehicleId);
+    const updatedVehicle = await this.getVehicleById(vehicleId);
+
+    // Broadcast vehicle update to authorized stations (including newly authorized ones)
+    const wsServer = CentralWebSocketServer.getInstance();
+    if (wsServer && updatedVehicle.isActive) {
+      await wsServer.broadcastVehicleUpdate(vehicleId, 'update');
+    }
+
+    return updatedVehicle;
   }
 
   /**
@@ -695,6 +718,12 @@ export class VehicleService {
 
     if (activeQueues > 0) {
       throw new Error('Cannot delete vehicle that is in active queues');
+    }
+
+    // Broadcast vehicle deletion to authorized stations (before deletion)
+    const wsServer = CentralWebSocketServer.getInstance();
+    if (wsServer) {
+      await wsServer.broadcastVehicleUpdate(vehicleId, 'delete');
     }
 
     // Delete driver first if exists (due to foreign key constraint)
