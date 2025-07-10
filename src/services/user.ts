@@ -1,9 +1,7 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../config/database';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { twilioService } from './twilio';
-
-const prisma = new PrismaClient();
 
 interface CreateUserRequest {
   phoneNumber: string;

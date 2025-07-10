@@ -89,6 +89,8 @@ model Station {
   queueEntries      VehicleQueue[]
   queueDestinations VehicleQueue[]            @relation("QueueDestination")
   authorizedVehicles VehicleAuthorizedStation[] // Vehicles authorized to operate from this station
+  departureTrips    Trip[]                    @relation("TripDeparture") // Trips departing from this station
+  arrivalTrips      Trip[]                    @relation("TripDestination") // Trips arriving at this station
   
   @@map("stations")
 }
@@ -181,6 +183,7 @@ model Vehicle {
   // Vehicle status
   isActive        Boolean           @default(false) @map("is_active") // Only active after driver approval
   isAvailable     Boolean           @default(true) @map("is_available") // Available for trips
+  isBanned        Boolean           @default(false) @map("is_banned") // Banned from operation
   
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
@@ -189,6 +192,7 @@ model Vehicle {
   driver              Driver?                     @relation() // One vehicle has one driver
   queueEntries        VehicleQueue[]              // Vehicle can be in multiple queues over time
   authorizedStations  VehicleAuthorizedStation[]  // Stations this vehicle can operate between
+  trips               Trip[]                      // Trips made by this vehicle
   
   @@map("vehicles")
 }
@@ -343,4 +347,26 @@ enum SyncStatus {
   PENDING
   SYNCED
   FAILED
-} 
+}
+
+// =============== TRIP TRACKING ===============
+
+model Trip {
+  id                String   @id @default(cuid())
+  vehicleId         String   @map("vehicle_id")
+  licensePlate      String   @map("license_plate")
+  departureStationId String  @map("departure_station_id") // Added departure station
+  destinationStationId String @map("destination_station_id")
+  destinationName   String   @map("destination_name")
+  queueId           String   @map("queue_id") // Reference to the original queue entry
+  seatsBooked       Int      @map("seats_booked") // Total seats booked for this trip
+  startTime         DateTime @map("start_time") // When the trip started
+  createdAt         DateTime @default(now()) @map("created_at")
+  
+  // Relations
+  vehicle           Vehicle  @relation(fields: [vehicleId], references: [id])
+  departureStation  Station  @relation("TripDeparture", fields: [departureStationId], references: [id])
+  destinationStation Station @relation("TripDestination", fields: [destinationStationId], references: [id])
+  
+  @@map("trips")
+}

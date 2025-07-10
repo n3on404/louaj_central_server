@@ -1,8 +1,6 @@
 import { Request, Response } from 'express';
 import { vehicleService } from '../services/vehicle';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../config/database';
 
 /**
  * Controller for vehicle management and driver requests
@@ -665,6 +663,26 @@ export class VehicleController {
         message: 'Failed to check vehicle authorization',
         code: 'CHECK_AUTHORIZATION_ERROR'
       });
+    }
+  }
+
+  /**
+   * POST /api/v1/vehicles/:id/ban
+   * Ban a vehicle (SUPERVISOR or ADMIN)
+   */
+  async banVehicle(req: Request, res: Response): Promise<void> {
+    try {
+      const { id: vehicleId } = req.params;
+      const { id: staffId } = req.staff!;
+      // Optionally: check supervisor/admin permissions for this vehicle
+      const result = await vehicleService.banVehicle(vehicleId, staffId);
+      if (result.success) {
+        res.json({ success: true, message: 'Vehicle banned successfully' });
+      } else {
+        res.status(400).json({ success: false, message: result.error || 'Failed to ban vehicle' });
+      }
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message || 'Failed to ban vehicle' });
     }
   }
 }

@@ -26,7 +26,7 @@ const router = Router();
  */
 router.post('/',
   authenticate,
-  requireAdmin,
+  requireSupervisor,
   createStation
 );
 
@@ -45,8 +45,6 @@ router.get('/',
  * GET /api/v1/stations/:id
  */
 router.get('/:id',
-  authenticate,
-  requireAdmin,
   getStationById
 );
 

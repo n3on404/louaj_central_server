@@ -121,6 +121,12 @@ router.post('/:id/check-route',
   vehicleController.checkVehicleAuthorization.bind(vehicleController)
 );
 
+/**
+ * POST /api/v1/vehicles/:id/ban
+ * Ban a vehicle (SUPERVISOR or ADMIN)
+ */
+router.post('/:id/ban', requireSupervisor, vehicleController.banVehicle.bind(vehicleController));
+
 // =============== ADMIN-ONLY ENDPOINTS ===============
 
 /**

@@ -1,6 +1,5 @@
-import { PrismaClient, QueueType, QueueStatus } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../config/database';
+import { QueueType, QueueStatus } from '@prisma/client';
 
 export interface SimpleVehicleEntry {
   licensePlate: string;

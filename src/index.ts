@@ -4,14 +4,11 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { createServer } from 'http';
-import { PrismaClient } from '@prisma/client';
 import { CentralWebSocketServer } from './websocket/WebSocketServer';
+import { testDatabaseConnection, disconnectDatabase } from './config/database';
 
 // Load environment variables
 dotenv.config();
-
-// Initialize Prisma Client
-const prisma = new PrismaClient();
 
 // Create Express app and HTTP server
 const app: Application = express();
@@ -24,7 +21,7 @@ const wsServer = new CentralWebSocketServer(httpServer);
 // Middleware
 app.use(helmet()); // Security headers
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3001',
   credentials: true
 }));
 app.use(morgan('combined')); // Logging
@@ -35,13 +32,23 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/health', async (_req: Request, res: Response) => {
   try {
     // Test database connection
-    await prisma.$queryRaw`SELECT 1`;
-    res.status(200).json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      service: 'Louaj Central Server',
-      database: 'connected'
-    });
+    const isConnected = await testDatabaseConnection();
+    if (isConnected) {
+      res.status(200).json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        service: 'Louaj Central Server',
+        database: 'connected'
+      });
+    } else {
+      res.status(503).json({
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        service: 'Louaj Central Server',
+        database: 'disconnected',
+        error: 'Database connection failed'
+      });
+    }
   } catch (error) {
     res.status(503).json({
       status: 'unhealthy',
@@ -72,7 +79,8 @@ app.get('/api/v1', (_req: Request, res: Response) => {
       vehicles: '/api/v1/vehicles',
       bookings: '/api/v1/bookings',
       queue: '/api/v1/queue',
-      users: '/api/v1/users'
+      users: '/api/v1/users',
+      routes: '/api/v1/routes'
     }
   });
 });
@@ -124,7 +132,10 @@ import stationRoutes from './routes/stations';
 import vehicleRoutes from './routes/vehicle';
 import queueRoutes from './routes/queue';
 import userRoutes from './routes/user';
-// import bookingRoutes from './routes/bookings';
+import bookingRoutes from './routes/booking';
+import tripRoutes from './routes/trip';
+import staffRoutes from './routes/staff';
+import routeRoutes from './routes/route';
 
 // Use routes
 app.use('/api/v1/auth', authRoutes);
@@ -132,7 +143,10 @@ app.use('/api/v1/stations', stationRoutes);
 app.use('/api/v1/vehicles', vehicleRoutes);
 app.use('/api/v1/queue', queueRoutes);
 app.use('/api/v1/users', userRoutes);
-// app.use('/api/v1/bookings', bookingRoutes);
+app.use('/api/v1/bookings', bookingRoutes);
+app.use('/api/v1/trips', tripRoutes);
+app.use('/api/v1/staff', staffRoutes);
+app.use('/api/v1/routes', routeRoutes);
 
 // Error handling middleware
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
@@ -158,9 +172,9 @@ process.on('SIGINT', async () => {
   console.log('\nReceived SIGINT. Graceful shutdown...');
   try {
     await wsServer.close();
-  await prisma.$disconnect();
+    await disconnectDatabase();
     console.log('✅ Graceful shutdown completed');
-  process.exit(0);
+    process.exit(0);
   } catch (error) {
     console.error('❌ Error during graceful shutdown:', error);
     process.exit(1);
@@ -171,9 +185,9 @@ process.on('SIGTERM', async () => {
   console.log('\nReceived SIGTERM. Graceful shutdown...');
   try {
     await wsServer.close();
-  await prisma.$disconnect();
+    await disconnectDatabase();
     console.log('✅ Graceful shutdown completed');
-  process.exit(0);
+    process.exit(0);
   } catch (error) {
     console.error('❌ Error during graceful shutdown:', error);
     process.exit(1);

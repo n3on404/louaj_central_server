@@ -1,8 +1,9 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import { Server as HTTPServer } from 'http';
+import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import { prisma } from '../lib/database';
+import { prisma } from '../config/database';
 
 export interface ClientConnection {
   id: string;
@@ -23,13 +24,15 @@ export interface WebSocketMessage {
         // Staff authentication message types
         'staff_login_request' | 'staff_login_response' | 'staff_verify_request' | 'staff_verify_response' |
         // Vehicle sync message types
-        'vehicle_sync_full' | 'vehicle_sync_update' | 'vehicle_sync_delete' | 'vehicle_sync_ack' | 'vehicle_sync_error';
+        'vehicle_sync_full' | 'vehicle_sync_update' | 'vehicle_sync_delete' | 'vehicle_sync_ack' | 'vehicle_sync_error' |
+        // Real-time booking and seat availability message types
+        'seat_availability_request' | 'seat_availability_response' | 'booking_created' | 'booking_payment_updated' | 'booking_cancelled';
   payload?: any;
   timestamp: number;
   messageId?: string;
 }
 
-export class CentralWebSocketServer {
+export class CentralWebSocketServer extends EventEmitter {
   private static instance: CentralWebSocketServer | null = null;
   private wss: WebSocketServer;
   private clients: Map<string, ClientConnection> = new Map();
@@ -38,6 +41,7 @@ export class CentralWebSocketServer {
   private readonly CONNECTION_TIMEOUT = 60000; // 60 seconds
 
   constructor(server: HTTPServer) {
+    super();
     this.wss = new WebSocketServer({ 
       server,
       path: '/ws',
@@ -169,6 +173,10 @@ export class CentralWebSocketServer {
 
         case 'vehicle_sync_ack':
           await this.handleVehicleSyncAck(clientId, message.payload);
+          break;
+
+        case 'seat_availability_response':
+          await this.handleSeatAvailabilityResponse(clientId, message.payload);
           break;
 
         default:
@@ -688,6 +696,47 @@ export class CentralWebSocketServer {
     });
   }
 
+  /**
+   * Send a message to a specific station by station ID
+   */
+  public sendToStation(stationId: string, message: WebSocketMessage): boolean {
+    const client = Array.from(this.clients.values()).find(c => c.stationId === stationId);
+    if (client) {
+      return this.sendToClient(client.id, message);
+    }
+    return false;
+  }
+
+  /**
+   * Broadcast message to all connected mobile apps
+   */
+  public broadcastToMobileApps(message: WebSocketMessage): void {
+    const mobileClients = Array.from(this.clients.values()).filter(
+      client => client.authenticated && client.connectionType === 'mobile-app'
+    );
+    
+    mobileClients.forEach(client => {
+      this.sendToClient(client.id, message);
+    });
+    
+    console.log(`📱 Broadcast to ${mobileClients.length} mobile apps: ${message.type}`);
+  }
+
+  /**
+   * Broadcast message to all connected desktop apps
+   */
+  public broadcastToDesktopApps(message: WebSocketMessage): void {
+    const desktopClients = Array.from(this.clients.values()).filter(
+      client => client.authenticated && client.connectionType === 'desktop-app'
+    );
+    
+    desktopClients.forEach(client => {
+      this.sendToClient(client.id, message);
+    });
+    
+    console.log(`💻 Broadcast to ${desktopClients.length} desktop apps: ${message.type}`);
+  }
+
   private startHeartbeatMonitor(): void {
     this.heartbeatInterval = setInterval(async () => {
       const now = new Date();
@@ -749,15 +798,9 @@ export class CentralWebSocketServer {
     return Array.from(this.clients.values()).filter(client => client.authenticated && client.stationId);
   }
 
-  public sendToStation(stationId: string, message: WebSocketMessage): boolean {
-    const client = Array.from(this.clients.values()).find(c => c.stationId === stationId);
-    if (client) {
-      return this.sendToClient(client.id, message);
-    }
-    return false;
-  }
-
-  // Get station status from database
+  /**
+   * Get station status from database
+   */
   public async getStationStatus(stationId?: string): Promise<any> {
     try {
       if (stationId) {
@@ -973,6 +1016,28 @@ export class CentralWebSocketServer {
     // For now, just log the acknowledgment
   }
 
+  /**
+   * Handle seat availability response from local station
+   */
+  private async handleSeatAvailabilityResponse(clientId: string, payload: any): Promise<void> {
+    const client = this.clients.get(clientId);
+    if (!client || !client.authenticated) return;
+
+    console.log(`📋 Seat availability response from ${client.stationName}: ${payload.requestId}`);
+    
+    // Emit event for booking service to handle
+    // This allows the booking service to receive real-time seat availability updates
+    this.emit('seat_availability_response', {
+      stationId: client.stationId,
+      requestId: payload.requestId,
+      destinationId: payload.destinationId,
+      success: payload.success,
+      data: payload.data,
+      error: payload.error,
+      timestamp: payload.timestamp
+    });
+  }
+
   public async close(): Promise<void> {
     console.log('🔄 Closing WebSocket Server and cleaning up...');
     
@@ -1029,4 +1094,4 @@ export class CentralWebSocketServer {
     this.wss.close();
     console.log('✅ Central WebSocket Server closed');
   }
-} 
+}

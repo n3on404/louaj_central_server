@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
-import { PrismaClient, StaffRole } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../config/database';
+import { StaffRole } from '@prisma/client';
 
 // =============== ADMIN FUNCTIONS ===============
 
@@ -11,6 +10,15 @@ const prisma = new PrismaClient();
  */
 export const createStation = async (req: Request, res: Response): Promise<void> => {
   try {
+    // Allow SUPERVISOR or ADMIN
+    if (!req.staff || (req.staff.role !== 'ADMIN' && req.staff.role !== 'SUPERVISOR')) {
+      res.status(403).json({
+        success: false,
+        message: 'Only supervisors or admins can create stations',
+        code: 'FORBIDDEN'
+      });
+      return;
+    }
     const { 
       name, 
       nameAr, 

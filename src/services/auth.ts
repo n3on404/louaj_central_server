@@ -1,8 +1,7 @@
 import jwt from 'jsonwebtoken';
-import { PrismaClient, StaffRole } from '@prisma/client';
+import { prisma } from '../config/database';
+import { StaffRole } from '@prisma/client';
 import { twilioService, TwilioService } from './twilio';
-
-const prisma = new PrismaClient();
 
 interface LoginResponse {
   success: boolean;

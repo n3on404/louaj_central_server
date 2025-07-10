@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../config/database';
 import { CentralWebSocketServer } from '../websocket/WebSocketServer';
-
-const prisma = new PrismaClient();
 
 export interface DriverVehicleRequest {
   // Driver info
@@ -12,14 +10,14 @@ export interface DriverVehicleRequest {
   originGovernorateId: string;
   originDelegationId: string;
   originAddress?: string;
-  
+
   // Vehicle info
   licensePlate: string;
   capacity: number;
   model?: string;
   year?: number;
   color?: string;
-  
+
   // Authorized stations - stations this vehicle can work between
   authorizedStationIds: string[];
 }
@@ -34,7 +32,7 @@ export interface VehicleApprovalData {
  * Service class for handling vehicles and driver requests
  */
 export class VehicleService {
-  
+
   /**
    * Find the closest station to given governorate/delegation
    */
@@ -342,8 +340,8 @@ export class VehicleService {
     return {
       success: true,
       driver: updatedDriver,
-      message: approvalData.approved 
-        ? 'Driver request approved successfully' 
+      message: approvalData.approved
+        ? 'Driver request approved successfully'
         : 'Driver request rejected'
     };
   }
@@ -369,13 +367,15 @@ export class VehicleService {
       where.OR = [
         { licensePlate: { contains: filters.search, mode: 'insensitive' } },
         { model: { contains: filters.search, mode: 'insensitive' } },
-        { driver: { 
-          OR: [
-            { firstName: { contains: filters.search, mode: 'insensitive' } },
-            { lastName: { contains: filters.search, mode: 'insensitive' } },
-            { cin: { contains: filters.search, mode: 'insensitive' } }
-          ]
-        }}
+        {
+          driver: {
+            OR: [
+              { firstName: { contains: filters.search, mode: 'insensitive' } },
+              { lastName: { contains: filters.search, mode: 'insensitive' } },
+              { cin: { contains: filters.search, mode: 'insensitive' } }
+            ]
+          }
+        }
       ];
     }
 
@@ -710,7 +710,7 @@ export class VehicleService {
 
     // Check if vehicle is in any active queues
     const activeQueues = await prisma.vehicleQueue.count({
-      where: { 
+      where: {
         vehicleId: vehicleId,
         status: { in: ['WAITING', 'LOADING'] }
       }
@@ -739,6 +739,22 @@ export class VehicleService {
     });
 
     return { success: true, message: 'Vehicle deleted successfully' };
+  }
+
+  /**
+   * Ban a vehicle (set isBanned=true, isActive=false)
+   */
+  async banVehicle(vehicleId: string, _staffId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await prisma.vehicle.update({
+        where: { id: vehicleId },
+        data: { isBanned: true, isActive: false, updatedAt: new Date() }
+      });
+      // Optionally: log the ban action, notify, etc.
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to ban vehicle' };
+    }
   }
 }
 
