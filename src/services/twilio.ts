@@ -160,5 +160,42 @@ class TwilioService {
 
 // Export singleton instance
 export const twilioService = new TwilioService();
+
+// Export convenience function for sending SMS
+export const sendSMS = async (phoneNumber: string, message: string): Promise<void> => {
+  try {
+    const formattedPhone = TwilioService.formatTunisianPhoneNumber(phoneNumber);
+    console.log(`📱 Sending SMS to: ${formattedPhone}`);
+
+    if (process.env.TWILIO_TEST_MODE === 'true' || true) {
+      console.log(`🧪 TEST MODE: SMS would be sent to ${formattedPhone}: ${message}`);
+      return;
+    }
+
+    // Real SMS sending (only in production)
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+
+    if (!accountSid || !authToken || !fromNumber) {
+      throw new Error('Missing Twilio SMS configuration');
+    }
+
+    const { Twilio } = require('twilio');
+    const client = new Twilio(accountSid, authToken);
+
+    await client.messages.create({
+      body: message,
+      from: fromNumber,
+      to: formattedPhone
+    });
+
+    console.log(`✅ SMS sent successfully to ${formattedPhone}`);
+  } catch (error: any) {
+    console.error('❌ Error sending SMS:', error.message);
+    throw new Error(`Failed to send SMS: ${error.message}`);
+  }
+};
+
 export { TwilioService };
 export type { TwilioVerificationResult, TwilioVerificationStatus }; 

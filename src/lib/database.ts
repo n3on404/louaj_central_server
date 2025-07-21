@@ -13,7 +13,7 @@ const prisma =
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
     datasources: {
       db: {
-        url: process.env.DATABASE_URL || '',
+        url: process.env.DATABASE_URL || "postgres://avnadmin:AVNS_7duJhhko0MWxBVavIhT@pg-louaj-louaj-app.g.aivencloud.com:23167/defaultdb?sslmode=require",
       },
     },
   });

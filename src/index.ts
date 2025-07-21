@@ -21,7 +21,7 @@ const wsServer = new CentralWebSocketServer(httpServer);
 // Middleware
 app.use(helmet()); // Security headers
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3001',
+  origin: true,
   credentials: true
 }));
 app.use(morgan('combined')); // Logging
@@ -80,7 +80,8 @@ app.get('/api/v1', (_req: Request, res: Response) => {
       bookings: '/api/v1/bookings',
       queue: '/api/v1/queue',
       users: '/api/v1/users',
-      routes: '/api/v1/routes'
+      routes: '/api/v1/routes',
+
     }
   });
 });
@@ -91,9 +92,9 @@ app.get('/api/v1/socket/status', async (_req: Request, res: Response) => {
     const connectedClients = wsServer.getClientCount();
     const authenticatedStations = wsServer.getAuthenticatedStations();
     const stationStatusFromDB = await wsServer.getStationStatus();
-  
-  res.json({
-    status: 'active',
+
+    res.json({
+      status: 'active',
       connectedClients,
       authenticatedStations: authenticatedStations.length,
       webSocketClients: authenticatedStations.map(station => ({
@@ -121,8 +122,8 @@ app.get('/api/v1/socket/status', async (_req: Request, res: Response) => {
     res.status(500).json({
       error: 'Failed to get WebSocket status',
       message: error instanceof Error ? error.message : 'Unknown error',
-    timestamp: new Date().toISOString()
-  });
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
@@ -136,7 +137,6 @@ import bookingRoutes from './routes/booking';
 import tripRoutes from './routes/trip';
 import staffRoutes from './routes/staff';
 import routeRoutes from './routes/route';
-
 // Use routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/stations', stationRoutes);
