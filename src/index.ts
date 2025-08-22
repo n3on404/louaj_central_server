@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { CentralWebSocketServer } from './websocket/WebSocketServer';
 import { testDatabaseConnection, disconnectDatabase } from './config/database';
+import { routeDiscoveryService } from './services/routeDiscovery';
 
 // Load environment variables
 dotenv.config();
@@ -81,6 +82,7 @@ app.get('/api/v1', (_req: Request, res: Response) => {
       queue: '/api/v1/queue',
       users: '/api/v1/users',
       routes: '/api/v1/routes',
+      routeDiscovery: '/api/v1/route-discovery'
 
     }
   });
@@ -134,9 +136,11 @@ import vehicleRoutes from './routes/vehicle';
 import queueRoutes from './routes/queue';
 import userRoutes from './routes/user';
 import bookingRoutes from './routes/booking';
+import centralBookingRoutes from './routes/centralBooking';
 import tripRoutes from './routes/trip';
 import staffRoutes from './routes/staff';
 import routeRoutes from './routes/route';
+import routeDiscoveryRoutes from './routes/routeDiscovery';
 // Use routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/stations', stationRoutes);
@@ -144,9 +148,11 @@ app.use('/api/v1/vehicles', vehicleRoutes);
 app.use('/api/v1/queue', queueRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/bookings', bookingRoutes);
+app.use('/api/v1/central-bookings', centralBookingRoutes);
 app.use('/api/v1/trips', tripRoutes);
 app.use('/api/v1/staff', staffRoutes);
 app.use('/api/v1/routes', routeRoutes);
+app.use('/api/v1/route-discovery', routeDiscoveryRoutes);
 
 // Error handling middleware
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
@@ -171,6 +177,7 @@ app.use((req: Request, res: Response) => {
 process.on('SIGINT', async () => {
   console.log('\nReceived SIGINT. Graceful shutdown...');
   try {
+    routeDiscoveryService.stop();
     await wsServer.close();
     await disconnectDatabase();
     console.log('✅ Graceful shutdown completed');
@@ -184,6 +191,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log('\nReceived SIGTERM. Graceful shutdown...');
   try {
+    routeDiscoveryService.stop();
     await wsServer.close();
     await disconnectDatabase();
     console.log('✅ Graceful shutdown completed');
@@ -201,6 +209,39 @@ httpServer.listen(PORT, () => {
   console.log(`API Documentation: http://localhost:${PORT}/api/v1`);
   console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  
+  // Setup route discovery service events
+  routeDiscoveryService.on('station_online', (station) => {
+    console.log(`🟢 Station ${station.stationName} is now online`);
+    
+    // Broadcast to mobile apps that a new station is available
+    wsServer.broadcastToMobileApps({
+      type: 'station_status_update',
+      payload: {
+        stationId: station.stationId,
+        stationName: station.stationName,
+        status: 'online',
+        timestamp: new Date().toISOString()
+      },
+      timestamp: Date.now()
+    });
+  });
+  
+  routeDiscoveryService.on('station_offline', (station) => {
+    console.log(`🔴 Station ${station.stationName} is now offline`);
+    
+    // Broadcast to mobile apps that a station is no longer available
+    wsServer.broadcastToMobileApps({
+      type: 'station_status_update',
+      payload: {
+        stationId: station.stationId,
+        stationName: station.stationName,
+        status: 'offline',
+        timestamp: new Date().toISOString()
+      },
+      timestamp: Date.now()
+    });
+  });
 });
 
 export default app; 

@@ -35,8 +35,8 @@ router.post('/',
  * GET /api/v1/stations
  */
 router.get('/',
-  authenticate,
-  requireAdmin,
+  //authenticate,
+  //requireAdmin,
   getAllStations
 );
 

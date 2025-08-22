@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 
 // Database URL from environment or fallback
-const DATABASE_URL = process.env.DATABASE_URL || "postgres://avnadmin:AVNS_7duJhhko0MWxBVavIhT@pg-louaj-louaj-app.g.aivencloud.com:23167/defaultdb?sslmode=require";
+const DATABASE_URL = process.env.DATABASE_URL || "postgresql://ivan:Lost2409@localhost:5432/louaj_main";
 
 // Initialize Prisma Client with explicit database URL
 const prisma = new PrismaClient({

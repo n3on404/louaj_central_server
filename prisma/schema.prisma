@@ -5,7 +5,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = "postgres://avnadmin:AVNS_7duJhhko0MWxBVavIhT@pg-louaj-louaj-app.g.aivencloud.com:23167/defaultdb?sslmode=require"
+  url      = "postgresql://ivan:Lost2409@localhost:5432/louaj_main"
 }
 
 // =============== USER MANAGEMENT ===============
@@ -311,6 +311,7 @@ model Booking {
 enum BookingStatus {
   PENDING      // Booking created, payment pending
   PAID         // Payment successful, booking confirmed
+  COMPLETED    // Ticket verified/used at station
   FAILED       // Payment failed
   CANCELLED    // Booking cancelled by user
   EXPIRED      // Booking expired (payment not completed in time)

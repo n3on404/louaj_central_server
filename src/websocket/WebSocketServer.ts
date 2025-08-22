@@ -202,12 +202,41 @@ export class CentralWebSocketServer extends EventEmitter {
     if (!client) return;
 
     try {
-      const { stationId, publicIp } = payload;
+      const { stationId, connectionType, deviceId, appVersion, publicIp } = payload;
 
+      // Handle mobile app authentication (no station ID required)
+      if (connectionType === 'mobile-app') {
+        // Mobile apps don't need a station ID
+        client.authenticated = true;
+        client.connectionType = 'mobile-app';
+        client.lastHeartbeat = new Date();
+
+        console.log(`📱 Mobile app authenticated: ${deviceId || 'unknown device'} (${appVersion || 'unknown version'})`);
+
+        // Send authentication success
+        this.sendToClient(clientId, {
+          type: 'authenticated',
+          payload: {
+            connectionId: clientId,
+            connectionType: 'mobile-app',
+            capabilities: [
+              'route_discovery_updates',
+              'booking_updates',
+              'station_status_updates'
+            ],
+            serverTime: new Date().toISOString()
+          },
+          timestamp: Date.now()
+        });
+
+        return;
+      }
+
+      // Handle station-based authentication (local-node, desktop-app)
       if (!stationId) {
         this.sendToClient(clientId, {
           type: 'auth_error',
-          payload: { message: 'Station ID is required' },
+          payload: { message: 'Station ID is required for station-based connections' },
           timestamp: Date.now()
         });
         return;

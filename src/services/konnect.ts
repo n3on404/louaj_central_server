@@ -24,11 +24,45 @@ interface KonnectPaymentResponse {
   paymentRef: string;
 }
 
+interface KonnectPaymentVerificationResponse {
+  payment: {
+    id: string;
+    status: 'completed' | 'pending';
+    amountDue: number;
+    reachedAmount: number;
+    amount: number;
+    token: string;
+    convertedAmount: number;
+    exchangeRate: number;
+    expirationDate: string;
+    shortId: string;
+    link: string;
+    webhook?: string;
+    successUrl?: string;
+    failUrl?: string;
+    orderId: string;
+    type: string;
+    details: string;
+    acceptedPaymentMethods: string[];
+    receiverWallet: any;
+    transactions: Array<{
+      id: string;
+      status: string;
+      amount: number;
+      [key: string]: any;
+    }>;
+  };
+}
+
 interface PaymentResult {
   success: boolean;
   payUrl?: string;
   paymentRef?: string;
   error?: string;
+  status?: 'completed' | 'pending' | 'expired';
+  amount?: number;
+  orderId?: string;
+  expirationDate?: string;
 }
 
 class KonnectService {
@@ -133,9 +167,93 @@ class KonnectService {
     // Create a direct clicktopay link using the payment reference
     return `https://gateway.sandbox.konnect.network/payment/${paymentRef}`;
   }
+
+
+  async verifyPayment(paymentId: string): Promise<PaymentResult> {
+    try {
+      console.log(`🔍 Verifying Konnect payment: ${paymentId}`);
+
+      const response = await axios.get<KonnectPaymentVerificationResponse>(
+        `${this.baseUrl}/payments/${paymentId}`,
+        {
+          headers: {
+            'x-api-key': this.apiKey,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      const payment = response.data.payment;
+      console.log(`✅ Konnect payment retrieved: ${payment.id} - Status: ${payment.status}`);
+
+      // Check if payment has expired
+      const now = new Date();
+      const expirationDate = new Date(payment.expirationDate);
+      const isExpired = now > expirationDate;
+
+      if (isExpired) {
+        console.log(`⏰ Payment ${payment.id} has expired`);
+        return {
+          success: false,
+          status: 'expired',
+          error: 'Payment has expired',
+          expirationDate: payment.expirationDate,
+          orderId: payment.orderId
+        };
+      }
+
+      // Check payment status
+      if (payment.status === 'completed') {
+        console.log(`✅ Payment ${payment.id} completed successfully`);
+        return {
+          success: true,
+          status: 'completed',
+          paymentRef: payment.id,
+          amount: payment.amount,
+          orderId: payment.orderId,
+          expirationDate: payment.expirationDate
+        };
+      } else {
+        console.log(`⏳ Payment ${payment.id} is still pending`);
+        return {
+          success: false,
+          status: 'pending',
+          paymentRef: payment.id,
+          amount: payment.amount,
+          orderId: payment.orderId,
+          expirationDate: payment.expirationDate,
+          error: 'Payment is still pending'
+        };
+      }
+
+    } catch (error: any) {
+      console.error('❌ Konnect payment verification failed:', error.response?.data || error.message);
+
+      // Handle 404 error specifically (payment not found)
+      if (error.response?.status === 404) {
+        return {
+          success: false,
+          error: 'Payment not found - Invalid or non-existent payment ID'
+        };
+      }
+
+      // Handle 401 error (authentication)
+      if (error.response?.status === 401) {
+        return {
+          success: false,
+          error: 'Invalid authentication - Check API key'
+        };
+      }
+
+      return {
+        success: false,
+        error: error.response?.data?.message || error.message || 'Payment verification failed'
+      };
+    }
+  }
 }
 
 // Export singleton instance
 export const konnectService = new KonnectService();
 export { KonnectService };
-export type { KonnectPaymentRequest, KonnectPaymentResponse, PaymentResult };
+export type { KonnectPaymentRequest, KonnectPaymentResponse, KonnectPaymentVerificationResponse, PaymentResult };
