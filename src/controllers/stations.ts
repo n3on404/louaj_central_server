@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { StaffRole } from '@prisma/client';
+import axios from 'axios';
 
 // =============== ADMIN FUNCTIONS ===============
 
@@ -693,6 +694,241 @@ export const updateMyStation = async (req: Request, res: Response): Promise<void
     res.status(500).json({
       success: false,
       message: 'Failed to update station',
+      error: error.message
+    });
+  }
+}; 
+
+/**
+ * Create station and supervisor from approved partnership request (ADMIN only)
+ * POST /api/v1/stations/partnership-request
+ */
+export const createFromPartnershipRequest = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const {
+      requestNumber,
+      firstName,
+      lastName,
+      phoneNumber,
+      cin,
+      governorate,
+      delegation,
+      latitude,
+      longitude
+    } = req.body;
+
+    // Validate required fields
+    if (!requestNumber || !firstName || !lastName || !phoneNumber || !cin || !governorate || !delegation) {
+      res.status(400).json({
+        success: false,
+        message: 'Missing required fields',
+        code: 'MISSING_REQUIRED_FIELDS'
+      });
+      return;
+    }
+
+    // Check if CIN already exists in staff table
+    const existingStaff = await prisma.staff.findUnique({
+      where: { cin }
+    });
+
+    if (existingStaff) {
+      res.status(400).json({
+        success: false,
+        message: 'CIN already exists in staff database',
+        code: 'CIN_ALREADY_EXISTS'
+      });
+      return;
+    }
+
+    // Check if station name already exists
+    const existingStation = await prisma.station.findFirst({
+      where: { name: { equals: `${delegation} Station`, mode: 'insensitive' } }
+    });
+
+    if (existingStation) {
+      res.status(400).json({
+        success: false,
+        message: `Station with name "${delegation} Station" already exists`,
+        code: 'STATION_NAME_EXISTS'
+      });
+      return;
+    }
+
+    // Use Tunisian Municipality API to get Arabic names and coordinates (only as fallback)
+    let finalLatitude = latitude;
+    let finalLongitude = longitude;
+    let governorateNameAr = null;
+    let delegationNameAr = null;
+
+    try {
+      const municipalityResponse = await axios.get(`https://tn-municipality-api.vercel.app/api/municipalities?name=${encodeURIComponent(governorate)}&delegation=${encodeURIComponent(delegation)}`);
+      
+      if (municipalityResponse.data && Array.isArray(municipalityResponse.data) && municipalityResponse.data.length > 0) {
+        const governorateData = municipalityResponse.data[0] as any;
+        
+        // Get governorate Arabic name
+        if (governorateData.NameAr) {
+          governorateNameAr = governorateData.NameAr;
+        }
+        
+        // Find delegation and get its data
+        const delegationData = governorateData.Delegations?.find((d: any) => 
+          d.Name.toLowerCase().includes(delegation.toLowerCase()) ||
+          d.Value.toLowerCase().includes(delegation.toLowerCase())
+        );
+        
+        if (delegationData) {
+          // Get delegation Arabic name
+          if (delegationData.NameAr) {
+            delegationNameAr = delegationData.NameAr;
+          }
+          
+          // ONLY use coordinates from API if user didn't provide any coordinates
+          if (!latitude && !longitude) {
+            finalLatitude = delegationData.Latitude;
+            finalLongitude = delegationData.Longitude;
+            console.log(`📍 Using coordinates from municipality API: ${finalLatitude}, ${finalLongitude}`);
+          } else {
+            console.log(`📍 Using user-provided coordinates: ${finalLatitude}, ${finalLongitude}`);
+          }
+        }
+      }
+    } catch (apiError) {
+      console.warn('⚠️ Could not fetch data from municipality API, using default values');
+      // Only set default coordinates if user didn't provide any
+      if (!latitude && !longitude) {
+        finalLatitude = 36.8065; // Tunisia center
+        finalLongitude = 10.1815;
+        console.log(`📍 Using default Tunisia center coordinates: ${finalLatitude}, ${finalLongitude}`);
+      }
+    }
+
+    // Start transaction to create everything together
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Find or create governorate
+      let governorateRecord = await tx.governorate.findFirst({
+        where: { name: { equals: governorate, mode: 'insensitive' } }
+      });
+
+      if (!governorateRecord) {
+        governorateRecord = await tx.governorate.create({
+          data: {
+            name: governorate,
+            nameAr: governorateNameAr
+          }
+        });
+        console.log(`🏛️ Created new governorate: ${governorate}${governorateNameAr ? ` (${governorateNameAr})` : ''}`);
+      } else if (governorateNameAr && !governorateRecord.nameAr) {
+        // Update existing governorate with Arabic name if we have it
+        governorateRecord = await tx.governorate.update({
+          where: { id: governorateRecord.id },
+          data: { nameAr: governorateNameAr }
+        });
+        console.log(`🏛️ Updated governorate with Arabic name: ${governorate} (${governorateNameAr})`);
+      }
+
+      // 2. Find or create delegation
+      let delegationRecord = await tx.delegation.findFirst({
+        where: { 
+          name: { equals: delegation, mode: 'insensitive' },
+          governorateId: governorateRecord.id
+        }
+      });
+
+      if (!delegationRecord) {
+        delegationRecord = await tx.delegation.create({
+          data: {
+            name: delegation,
+            nameAr: delegationNameAr,
+            governorateId: governorateRecord.id
+          }
+        });
+        console.log(`🏘️ Created new delegation: ${delegation}${delegationNameAr ? ` (${delegationNameAr})` : ''} in ${governorate}`);
+      } else if (delegationNameAr && !delegationRecord.nameAr) {
+        // Update existing delegation with Arabic name if we have it
+        delegationRecord = await tx.delegation.update({
+          where: { id: delegationRecord.id },
+          data: { nameAr: delegationNameAr }
+        });
+        console.log(`🏘️ Updated delegation with Arabic name: ${delegation} (${delegationNameAr})`);
+      }
+
+      // 3. Create supervisor staff member
+      const supervisor = await tx.staff.create({
+        data: {
+          cin,
+          phoneNumber,
+          firstName,
+          lastName,
+          role: StaffRole.SUPERVISOR,
+          isActive: true
+        }
+      });
+
+      console.log(`👤 Created supervisor: ${firstName} ${lastName} (CIN: ${cin})`);
+
+      // 4. Create station
+      const station = await tx.station.create({
+        data: {
+          name: `${delegation} Station`,
+          nameAr: delegationNameAr ? `${delegationNameAr} محطة` : null,
+          governorateId: governorateRecord.id,
+          delegationId: delegationRecord.id,
+          address: `${delegation}, ${governorate}`,
+          latitude: finalLatitude,
+          longitude: finalLongitude,
+          supervisorId: supervisor.id,
+          isActive: true,
+          isOnline: false
+        },
+        include: {
+          governorate: true,
+          delegation: true,
+          supervisor: {
+            select: {
+              id: true,
+              cin: true,
+              firstName: true,
+              lastName: true,
+              phoneNumber: true,
+              role: true
+            }
+          }
+        }
+      });
+
+      console.log(`🏢 Created station: ${station.name} (${station.nameAr || 'No Arabic name'}) at ${delegation}, ${governorate}`);
+
+      // 5. Update supervisor to set stationId (establish the station relationship)
+      await tx.staff.update({
+        where: { id: supervisor.id },
+        data: { stationId: station.id }
+      });
+
+      console.log(`🔗 Linked supervisor ${supervisor.id} to station ${station.id}`);
+
+      return {
+        station,
+        supervisor,
+        governorate: governorateRecord,
+        delegation: delegationRecord
+      };
+    });
+
+    console.log(`✅ Successfully created station and supervisor from partnership request: ${requestNumber}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Station and supervisor created successfully from partnership request',
+      data: result
+    });
+
+  } catch (error: any) {
+    console.error('❌ Error creating station from partnership request:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create station from partnership request',
       error: error.message
     });
   }

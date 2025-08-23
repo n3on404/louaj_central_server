@@ -25,7 +25,7 @@ class TwilioService {
     const accountSid = process.env.TWILIO_ACCOUNT_SID || 'AC6273eee1f2cd0ee04e1c7d3bb2012d01';
     const authToken = process.env.TWILIO_AUTH_TOKEN || '15f031d0cadae20cf9aa3048af197d9d';
     this.verifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID || 'VAf28468c7c6ea8cba5b1ada91b8dd4495';
-    this.useTestMode = process.env.TWILIO_TEST_MODE === 'true' || false;  
+    this.useTestMode = process.env.TWILIO_TEST_MODE === 'true' || true;  
 
     if (!accountSid || !authToken || !this.verifyServiceSid) {
       throw new Error('Missing Twilio configuration. Please check your environment variables.');

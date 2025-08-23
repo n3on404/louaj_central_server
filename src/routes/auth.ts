@@ -16,8 +16,7 @@ import {
   requireSupervisor,
   requireStaff,
   validateCIN,
-  validatePhoneNumber,
-  rateLimitSMS
+  validatePhoneNumber
 } from '../middleware/auth';
 
 const router = Router();
@@ -66,7 +65,6 @@ router.post('/register/worker',
  */
 router.post('/login/start',
   validateCIN,
-  rateLimitSMS(3, 15), // 3 attempts per 15 minutes
   startLogin
 );
 
@@ -76,7 +74,6 @@ router.post('/login/start',
  */
 router.post('/login/verify',
   validateCIN,
-  rateLimitSMS(5, 30), // 5 attempts per 30 minutes (more lenient for verification)
   verifyLogin
 );
 
@@ -122,7 +119,6 @@ router.post('/logout',
 if (process.env.NODE_ENV === 'development' || process.env.ALLOW_SMS_TEST === 'true') {
   router.post('/test-sms',
     validatePhoneNumber,
-    rateLimitSMS(2, 10), // Limited testing
     testSMS
   );
 }

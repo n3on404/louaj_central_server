@@ -8,7 +8,8 @@ import {
   assignSupervisor,
   removeSupervisor,
   getMyStation,
-  updateMyStation
+  updateMyStation,
+  createFromPartnershipRequest
 } from '../controllers/stations';
 import {
   authenticate,
@@ -88,6 +89,16 @@ router.delete('/:id/supervisor',
   removeSupervisor
 );
 
+/**
+ * Create station and supervisor from approved partnership request (ADMIN only)
+ * POST /api/v1/stations/partnership-request
+ */
+router.post('/partnership-request',
+  authenticate,
+  requireAdmin,
+  createFromPartnershipRequest
+);
+
 // =============== SUPERVISOR ROUTES ===============
 
 /**
@@ -127,7 +138,8 @@ router.get('/health/check', (_req, res) => {
         update_station: 'PUT /api/v1/stations/:id',
         delete_station: 'DELETE /api/v1/stations/:id',
         assign_supervisor: 'POST /api/v1/stations/:id/supervisor',
-        remove_supervisor: 'DELETE /api/v1/stations/:id/supervisor'
+        remove_supervisor: 'DELETE /api/v1/stations/:id/supervisor',
+        create_from_partnership: 'POST /api/v1/stations/partnership-request'
       },
       supervisor: {
         get_my_station: 'GET /api/v1/stations/my/station',
