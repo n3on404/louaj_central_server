@@ -287,7 +287,8 @@ model Booking {
   seatsBooked          Int           @map("seats_booked")
   totalAmount          Decimal       @db.Decimal(10, 2) @map("total_amount")
   journeyDate          DateTime      @map("journey_date")
-  
+  estimatedDepartureTime DateTime?     @map("estimated_arrival_time")  @default(now()) 
+
   // Payment Information (embedded in booking)
   paymentReference     String?       @unique @map("payment_reference") // Payment gateway transaction ID
   paymentProcessedAt   DateTime?     @map("payment_processed_at") // When payment was completed
@@ -314,7 +315,7 @@ enum BookingStatus {
   COMPLETED    // Ticket verified/used at station
   FAILED       // Payment failed
   CANCELLED    // Booking cancelled by user
-  EXPIRED      // Booking expired (payment not completed in time)
+  EXPIRED      // Booking expired (countdown + bonus time ran out)
   REFUNDED     // Booking refunded
 }
 // =============== SYNC MANAGEMENT ===============

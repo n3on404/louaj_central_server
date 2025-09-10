@@ -8,7 +8,8 @@ import {
   getProfile,
   testSMS,
   refreshToken,
-  logout
+  logout,
+  config
 } from '../controllers/auth';
 import {
   authenticate,
@@ -18,6 +19,7 @@ import {
   validateCIN,
   validatePhoneNumber
 } from '../middleware/auth';
+
 
 const router = Router();
 
@@ -107,6 +109,16 @@ router.post('/logout',
   authenticate,
   requireStaff,
   logout
+);
+
+
+/**
+ * Get config
+ * POST /api/v1/auth/config
+ */
+router.post('/config',
+  validateCIN,
+  config
 );
 
 // =============== TESTING & UTILITIES ===============

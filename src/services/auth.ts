@@ -505,6 +505,42 @@ class AuthService {
       };
     }
   }
+
+  async config(cin: string): Promise<{ success: boolean; message: string; data?: any }> {
+    try {
+      const staff = await prisma.staff.findUnique({
+        where: { cin },
+        include: {
+          station: true
+        }
+      });
+
+      if (!staff) {
+        return {
+          success: false,
+          message: 'Staff member not found with this CIN'
+        };
+      }
+
+      return {
+        success: true,
+        message: 'Config retrieved successfully',
+        data: {
+          stationId: staff.stationId,
+          stationName: staff.station?.name,
+          governorate: staff.station?.governorateId,
+          delegation: staff.station?.delegationId
+        }
+      };
+
+    } catch (error: any) {
+      console.error('❌ Config retrieval error:', error);
+      return {
+        success: false,
+        message: 'Failed to retrieve config'
+      };
+    }
+  }
 }
 
 // Export singleton instance

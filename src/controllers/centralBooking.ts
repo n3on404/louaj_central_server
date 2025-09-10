@@ -174,10 +174,22 @@ export class CentralBookingController {
         });
         return;
       }
-
-      // Check vehicle queue at departure station for the destination
-      const localNodeUrl = `http://${departureStation.localServerIp}:3001/api/public/queue/${destinationStationId}`;
       
+        const journeyDate = new Date();
+
+        // Calculate ETA for regular booking (current time + 10 minutes)
+        const calculateETA = (): Date => {
+          const now = new Date();
+          const eta = new Date(now.getTime() + 10 * 60 * 1000); // Add 10 minutes
+          return eta;
+        };
+
+        const estimatedDepartureTime = calculateETA();
+        console.log(`⏱️ ETA calculated for regular booking: ${estimatedDepartureTime.toISOString()} (10 minutes from booking time)`);
+
+        // Check vehicle queue at departure station for the destination
+      const localNodeUrl = `http://${departureStation.localServerIp}:3001/api/public/queue/${destinationStationId}`;
+
       try {
         const queueResponse = await axios.get(localNodeUrl, {
           timeout: 10000,
@@ -198,7 +210,7 @@ export class CentralBookingController {
         }
 
         const vehicles: VehicleQueueInfo[] = queueData.data.vehicles || [];
-        
+
         if (vehicles.length === 0) {
           res.status(400).json({
             success: false,
@@ -207,6 +219,384 @@ export class CentralBookingController {
           });
           return;
         }
+
+        // Extract ETA information from the local node response
+        const destinationETD = queueData.data.destinationETD;
+
+        // Find suitable vehicles with enough seats
+        let remainingSeats = numberOfSeats;
+        const selectedVehicles: Array<{vehicle: VehicleQueueInfo, seatsToBook: number}> = [];
+
+        for (const vehicle of vehicles.sort((a, b) => a.queuePosition - b.queuePosition)) {
+          if (remainingSeats <= 0) break;
+          
+          if (vehicle.availableSeats > 0) {
+            const seatsToBook = Math.min(remainingSeats, vehicle.availableSeats);
+            selectedVehicles.push({ vehicle, seatsToBook });
+            remainingSeats -= seatsToBook;
+          }
+        }
+
+        if (remainingSeats > 0) {
+          res.status(400).json({
+            success: false,
+            error: 'Insufficient seats available',
+            message: `Only ${numberOfSeats - remainingSeats} seats are available, but you requested ${numberOfSeats} seats`
+          });
+          return;
+        }
+
+        // Create booking in local node
+        const bookingPayload = {
+          userId: user.id,
+          userFullName: `${user.firstName} ${user.lastName}`,
+          userPhoneNumber: user.phoneNumber,
+          userEmail: user.email || '',
+          departureStationId,
+          destinationStationId,
+          numberOfSeats,
+          selectedVehicles: selectedVehicles.map(sv => ({
+            vehicleQueueId: sv.vehicle.queueId,
+            licensePlate: sv.vehicle.licensePlate,
+            seatsToBook: sv.seatsToBook,
+            pricePerSeat: sv.vehicle.pricePerSeat
+          }))
+        };
+
+        const bookingUrl = `http://${departureStation.localServerIp}:3001/api/bookings/create`;
+        const bookingResponse = await axios.post(bookingUrl, bookingPayload, {
+          timeout: 15000,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Louaj-Central-Server/1.0'
+          }
+        });
+
+        const bookingResult = bookingResponse.data as LocalNodeResponse;
+        if (!bookingResult.success) {
+          res.status(400).json({
+            success: false,
+            error: 'Booking failed at station',
+            message: bookingResult.error || 'Failed to create booking at the departure station'
+          });
+          return;
+        }
+
+        // Successful booking response
+        const booking = bookingResult.data;
+        
+        // Calculate total amount for payment
+        const totalAmount = booking.totalAmount;
+
+        // Use the webhook URL provided by the frontend, or fall back to Central Server's own webhook
+        const finalWebhookUrl = webhookUrl || `${process.env.BASE_URL || 'http://localhost:5000'}/api/v1/central-bookings/webhook/payment`;
+
+        console.log(`💳 Initializing Konnect payment for booking ${booking.verificationCode}: ${totalAmount} TND`);
+        console.log(`🪝 Using webhook URL: ${finalWebhookUrl}`);
+
+        const paymentResult = await konnectService.initializePayment({
+          amount: konnectService.convertToMillimes(totalAmount),
+          description: `LOUAJ Transport Booking - ${departureStation.name} to ${destinationStation.name} (${numberOfSeats} seats)`,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          phoneNumber: user.phoneNumber,
+          email: user.email || `${user.phoneNumber}@louaj.tn`,
+          orderId: booking.verificationCode,
+          webhook: finalWebhookUrl
+        });
+
+        if (!paymentResult.success) {
+          console.error('❌ Konnect payment initialization failed:', paymentResult.error);
+          res.status(500).json({
+            success: false,
+            error: 'Payment initialization failed',
+            message: paymentResult.error || 'Unable to initialize payment gateway'
+          });
+          return;
+        }
+
+        console.log(`✅ Konnect payment initialized: ${paymentResult.paymentRef}`);
+
+        // Store payment reference in a temporary booking record for tracking
+        try {
+          await prisma.booking.create({
+            data: {
+              userId: user.id,
+              departureStationId,
+              destinationStationId,
+              seatsBooked: numberOfSeats,
+              totalAmount,
+              journeyDate: journeyDate, // Use calculated journey date based on station opening time
+              estimatedDepartureTime: estimatedDepartureTime,
+              status: BookingStatus.PENDING,
+              paymentReference: paymentResult.paymentRef!, // We know it's not undefined here
+              verificationCode: booking.verificationCode
+            }
+          });
+          console.log(`📝 Central booking record created with payment ref: ${paymentResult.paymentRef}`);
+        } catch (dbError) {
+          console.warn('⚠️ Could not store booking in central database:', dbError);
+          // Continue anyway as the local booking is already created
+        }
+
+        res.json({
+          success: true,
+          data: {
+            booking: {
+              id: booking.id,
+              verificationCode: booking.verificationCode,
+              totalAmount: booking.totalAmount,
+              numberOfSeats: booking.numberOfSeats,
+              status: BookingStatus.PENDING,
+              journeyDate: journeyDate.toISOString(),
+              estimatedDepartureTime: estimatedDepartureTime.toISOString(),
+              createdAt: booking.createdAt
+            },
+            // Include AI-powered ETA predictions from local node
+            etaPrediction: destinationETD ? {
+                        estimatedDepartureTime: destinationETD.estimatedDepartureTime,
+          etdHours: destinationETD.etdHours,
+              confidenceLevel: destinationETD.confidenceLevel,
+              modelUsed: destinationETD.modelUsed,
+              queueVehicles: destinationETD.queueVehicles,
+              ...(destinationETD.overnightInfo && {
+                overnightInfo: destinationETD.overnightInfo
+              })
+            } : null,
+            payment: {
+              paymentUrl: paymentResult.payUrl,
+              paymentRef: paymentResult.paymentRef,
+              amount: totalAmount,
+              amountInMillimes: konnectService.convertToMillimes(totalAmount),
+              currency: 'TND',
+              expiresIn: '60 minutes'
+            },
+            route: {
+              departureStation: {
+                id: departureStation.id,
+                name: departureStation.name,
+                nameAr: departureStation.nameAr,
+                governorate: departureStation.governorate.name,
+                delegation: departureStation.delegation.name
+              },
+              destinationStation: {
+                id: destinationStation.id,
+                name: destinationStation.name,
+                nameAr: destinationStation.nameAr,
+                governorate: destinationStation.governorate.name,
+                delegation: destinationStation.delegation.name
+              }
+            },
+            vehicles: booking.vehicles || selectedVehicles.map(sv => ({
+              licensePlate: sv.vehicle.licensePlate,
+              driverName: sv.vehicle.driverName,
+              seatsBooked: sv.seatsToBook,
+              pricePerSeat: sv.vehicle.pricePerSeat,
+              queuePosition: sv.vehicle.queuePosition
+            })),
+            instructions: {
+              nextStep: "Complete payment using the provided payment URL",
+              paymentMethods: ["bank_card"],
+              redirectInfo: "You will be redirected to Konnect payment gateway"
+            },
+            meta: {
+              bookingTime: new Date().toISOString(),
+              source: 'central_server',
+              paymentProvider: 'konnect'
+            }
+          }
+        });
+
+        // Broadcast booking update to mobile apps
+        broadcastBookingUpdate('booking_created', {
+          bookingId: booking.id,
+          ticketNumber: booking.ticketNumber,
+          userId: user.id,
+          departureStationName: departureStation.name,
+          destinationStationName: destinationStation.name,
+          numberOfSeats: booking.numberOfSeats,
+          totalAmount: booking.totalAmount,
+          status: booking.status
+        });
+
+        console.log(`✅ Booking created successfully: ${booking.ticketNumber}`);
+
+      } catch (localNodeError) {
+        console.error(`❌ Error communicating with local node ${departureStation.localServerIp}:`, localNodeError);
+        
+        res.status(503).json({
+          success: false,
+          error: 'Station server unavailable',
+          message: 'The departure station server is currently not responding'
+        });
+      }
+
+    } catch (error) {
+      console.error('❌ Error creating booking:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to create booking',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  }
+
+  /**
+   * POST /api/v1/central-bookings/overnight
+   * Create an overnight booking
+   */
+  
+  async createOvernightBooking(req: Request, res: Response): Promise<void> {
+    try {
+      // Check if user is authenticated
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+          message: 'You must be logged in to create a booking'
+        });
+        return;
+      }
+
+      const { departureStationId, destinationStationId, numberOfSeats, webhookUrl }: BookingRequest & { webhookUrl?: string } = req.body;
+
+      // Validate input
+      if (!departureStationId || !destinationStationId || !numberOfSeats) {
+        res.status(400).json({
+          success: false,
+          error: 'Missing required fields',
+          message: 'Departure station, destination station, and number of seats are required'
+        });
+        return;
+      }
+
+      if (numberOfSeats < 1 || numberOfSeats > 10) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid number of seats',
+          message: 'Number of seats must be between 1 and 10'
+        });
+        return;
+      }
+
+      console.log(`🎫 Creating booking: ${departureStationId} → ${destinationStationId} (${numberOfSeats} seats) for user ${userId}`);
+
+      // Get departure station info
+      const departureStation = await prisma.station.findUnique({
+        where: { id: departureStationId },
+        select: {
+          id: true,
+          name: true,
+          nameAr: true,
+          localServerIp: true,
+          isActive: true,
+          isOnline: true,
+          governorate: { select: { name: true, nameAr: true } },
+          delegation: { select: { name: true, nameAr: true } }
+        }
+      });
+
+      if (!departureStation) {
+        res.status(404).json({
+          success: false,
+          error: 'Departure station not found'
+        });
+        return;
+      }
+
+      if (!departureStation.isActive) {
+        res.status(400).json({
+          success: false,
+          error: 'Departure station is not active'
+        });
+        return;
+      }
+
+      if (!departureStation.isOnline || !departureStation.localServerIp) {
+        res.status(503).json({
+          success: false,
+          error: 'Departure station is offline',
+          message: 'The departure station is currently not available'
+        });
+        return;
+      }
+
+      // Get destination station info
+      const destinationStation = await prisma.station.findUnique({
+        where: { id: destinationStationId },
+        select: {
+          id: true,
+          name: true,
+          nameAr: true,
+          governorate: { select: { name: true, nameAr: true } },
+          delegation: { select: { name: true, nameAr: true } }
+        }
+      });
+
+      if (!destinationStation) {
+        res.status(404).json({
+          success: false,
+          error: 'Destination station not found'
+        });
+        return;
+      }
+
+      // Get user info for booking
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phoneNumber: true,
+        }
+      });
+
+      if (!user) {
+        res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+        return;
+      }
+
+      // Check vehicle queue at departure station for the destination
+      const localNodeUrl = `http://${departureStation.localServerIp}:3001/api/public/overnight/${destinationStationId}`;
+      
+      try {
+        const queueResponse = await axios.get(localNodeUrl, {
+          timeout: 10000,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Louaj-Central-Server/1.0'
+          }
+        });
+
+        const queueData = queueResponse.data as LocalNodeResponse;
+        if (!queueData.success) {
+          res.status(400).json({
+            success: false,
+            error: 'No vehicles available in overnight queue',
+            message: 'No vehicles are currently queued for this destination in overnight queue'
+          });
+          return;
+        }
+
+        const vehicles: VehicleQueueInfo[] = queueData.data.vehicles || [];
+
+        if (vehicles.length === 0) {
+          res.status(400).json({
+            success: false,
+            error: 'No vehicles available in overnight queue',
+            message: 'No vehicles are currently queued for this destination in overnight queue'
+          });
+          return;
+        }
+
+        // Extract ETA information from the overnight queue response
+        const destinationETD = queueData.data.destinationETD;
 
         // Find suitable vehicles with enough seats
         let remainingSeats = numberOfSeats;
@@ -302,6 +692,66 @@ export class CentralBookingController {
 
         console.log(`✅ Konnect payment initialized: ${paymentResult.paymentRef}`);
 
+        // Get station configuration to determine journey date
+        const station_config_url = `http://${departureStation.localServerIp}:3001/api/public/config`;
+        const station_config_response = await axios.get(station_config_url, {
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Louaj-Central-Server/1.0'
+          }
+        });
+        const station_config = station_config_response.data as LocalNodeResponse;
+        if (!station_config.success) {
+          res.status(400).json({
+            success: false,
+            error: 'Failed to get station config',
+            message: station_config.error || 'Failed to get station config'
+          });
+          return;
+        }
+
+        const openingTime = station_config.data.openingTime;
+
+        // Calculate the correct journey date based on current time and station opening time
+        const calculateJourneyDate = (openingTimeStr: string): Date => {
+          const now = new Date();
+          const [openHour, openMinute] = openingTimeStr.split(':').map(Number);
+
+          // Create today's opening time
+          const todayOpeningTime = new Date(now);
+          todayOpeningTime.setHours(openHour, openMinute, 0, 0);
+
+          // If current time is before today's opening time, journey is today
+          // If current time is after today's opening time, journey is tomorrow
+          if (now < todayOpeningTime) {
+            // Booking before opening time - journey is today
+            return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          } else {
+            // Booking after opening time - journey is tomorrow
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            return new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate());
+          }
+        };
+
+        const journeyDate = calculateJourneyDate(openingTime);
+        console.log(`🕒 Journey date calculated: ${journeyDate.toISOString()} (Station opens at ${openingTime}, Current time: ${new Date().toISOString()})`);
+
+        // Calculate ETA for overnight booking (station opening time + 15 minutes)
+        const calculateOvernightETA = (journeyDate: Date, openingTimeStr: string): Date => {
+          const [openHour, openMinute] = openingTimeStr.split(':').map(Number);
+
+          // Set ETA to journey date at opening time + 15 minutes
+          const eta = new Date(journeyDate);
+          eta.setHours(openHour, openMinute, 0, 0);
+          eta.setTime(eta.getTime() + 15 * 60 * 1000); // Add 15 minutes
+
+          return eta;
+        };
+
+        const estimatedDepartureTime = calculateOvernightETA(journeyDate, openingTime);
+        console.log(`⏱️ ETA calculated for overnight booking: ${estimatedDepartureTime.toISOString()} (15 minutes after station opens)`);
+
         // Store payment reference in a temporary booking record for tracking
         try {
           await prisma.booking.create({
@@ -311,7 +761,8 @@ export class CentralBookingController {
               destinationStationId,
               seatsBooked: numberOfSeats,
               totalAmount,
-              journeyDate: new Date(), // Current date for immediate travel
+              journeyDate: journeyDate, // Use calculated journey date
+              estimatedDepartureTime: estimatedDepartureTime, 
               status: BookingStatus.PENDING,
               paymentReference: paymentResult.paymentRef!, // We know it's not undefined here
               verificationCode: booking.verificationCode
@@ -332,8 +783,21 @@ export class CentralBookingController {
               totalAmount: booking.totalAmount,
               numberOfSeats: booking.numberOfSeats,
               status: BookingStatus.PENDING,
+              journeyDate: journeyDate.toISOString(),
+              estimatedDepartureTime: estimatedDepartureTime.toISOString(),
               createdAt: booking.createdAt
             },
+            // Include AI-powered ETA predictions from local node for overnight booking
+            etaPrediction: destinationETD ? {
+                        estimatedDepartureTime: destinationETD.estimatedDepartureTime,
+          etdHours: destinationETD.etdHours,
+              confidenceLevel: destinationETD.confidenceLevel,
+              modelUsed: destinationETD.modelUsed,
+              queueVehicles: destinationETD.queueVehicles,
+              ...(destinationETD.overnightInfo && {
+                overnightInfo: destinationETD.overnightInfo
+              })
+            } : null,
             payment: {
               paymentUrl: paymentResult.payUrl,
               paymentRef: paymentResult.paymentRef,
@@ -411,7 +875,6 @@ export class CentralBookingController {
       });
     }
   }
-
   /**
    * POST /api/v1/central-bookings/test-payment/:paymentRef
    * Test payment completion (development only)
@@ -947,21 +1410,32 @@ export class CentralBookingController {
       // Find the booking by payment reference with all related data
       const booking = await prisma.booking.findFirst({
         where: { paymentReference: paymentRef },
-        include: {
-          user: {
-            select: { 
-              id: true, 
-              phoneNumber: true, 
-              firstName: true, 
-              lastName: true 
-            }
-          },
+        select: {
+          id: true,
+          seatsBooked: true,
+          totalAmount: true,
+          journeyDate: true,
+          estimatedDepartureTime: true,
+          verificationCode: true,
+          status: true,
+          paymentReference: true,
+          paymentProcessedAt: true,
+          createdAt: true,
+          updatedAt: true,
           departureStation: {
             select: {
               id: true,
               name: true,
-              governorate: true,
-              delegation: true,
+              governorate: {
+                select: {
+                  name: true
+                }
+              },
+              delegation: {
+                select: {
+                  name: true
+                }
+              },
               localServerIp: true
             }
           },
@@ -969,8 +1443,24 @@ export class CentralBookingController {
             select: {
               id: true,
               name: true,
-              governorate: true,
-              delegation: true
+              governorate: {
+                select: {
+                  name: true
+                }
+              },
+              delegation: {
+                select: {
+                  name: true
+                }
+              }
+            }
+          },
+          user: {
+            select: { 
+              id: true, 
+              phoneNumber: true, 
+              firstName: true, 
+              lastName: true 
             }
           }
         }
@@ -1036,6 +1526,7 @@ export class CentralBookingController {
             totalAmount: booking.totalAmount,
             seatsBooked: booking.seatsBooked,
             journeyDate: booking.journeyDate,
+            estimatedDepartureTime: booking.estimatedDepartureTime,
             paymentReference: booking.paymentReference,
             paymentProcessedAt: booking.paymentProcessedAt,
             createdAt: booking.createdAt,
@@ -1069,7 +1560,8 @@ export class CentralBookingController {
             isPaid: booking.status === 'PAID',
             departureLocation: `${booking.departureStation?.name}, ${booking.departureStation?.governorate}`,
             destinationLocation: `${booking.destinationStation?.name}, ${booking.destinationStation?.governorate}`,
-            journeyDate: booking.journeyDate
+            journeyDate: booking.journeyDate,
+            estimatedDepartureTime: booking.estimatedDepartureTime
           }
         }
       };
@@ -1082,6 +1574,237 @@ export class CentralBookingController {
       res.status(500).json({
         success: false,
         error: 'Failed to get booking details',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  }
+
+  /**
+   * GET /api/v1/central-bookings/latest-paid-ticket
+   * Get the latest paid ticket for the authenticated user
+   */
+  async getLatestPaidTicket(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+          message: 'You must be logged in to view your tickets'
+        });
+        return;
+      }
+
+      console.log(`🎫 Getting latest paid ticket for user: ${userId}`);
+
+      // Find the most recent paid booking for this user
+      const latestBooking = await prisma.booking.findFirst({
+        where: {
+          userId: userId,
+          status: 'PAID'
+        },
+        include: {
+          departureStation: {
+            select: {
+              id: true,
+              name: true,
+              nameAr: true,
+              governorate: true,
+              delegation: true,
+              localServerIp: true
+            }
+          },
+          destinationStation: {
+            select: {
+              id: true,
+              name: true,
+              nameAr: true,
+              governorate: true,
+              delegation: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        }
+      });
+
+      if (!latestBooking) {
+        res.json({
+          success: true,
+          data: null,
+          message: 'No paid tickets found'
+        });
+        return;
+      }
+
+      // Try to get ETD prediction from the local station
+      let etaPrediction = null;
+      if (latestBooking.departureStation?.localServerIp) {
+        try {
+          const response: any = await axios.get(
+            `http://${latestBooking.departureStation.localServerIp}:3001/api/public/destinations`,
+            {
+              timeout: 5000,
+              headers: {
+                'Content-Type': 'application/json'
+              }
+            }
+          );
+
+          if (response.data?.success && response.data?.data?.destinations) {
+            // Find the destination that matches our booking
+            const destination = response.data.data.destinations.find(
+              (dest: any) => dest.destinationId === latestBooking.destinationStation?.id
+            );
+
+            if (destination?.etaPrediction) {
+              etaPrediction = destination.etaPrediction;
+            }
+          }
+        } catch (error) {
+          console.warn('⚠️ Could not fetch ETD prediction for latest ticket:', error);
+        }
+      }
+
+      // Try to get vehicle allocation details
+      let vehicles = [];
+      if (latestBooking.departureStation?.localServerIp) {
+        try {
+          const vehicleResponse: any = await axios.get(
+            `http://${latestBooking.departureStation.localServerIp}:3001/api/queue-booking/allocations/${latestBooking.id}`,
+            {
+              timeout: 5000,
+              headers: {
+                'Content-Type': 'application/json',
+                'x-central-server': 'true'
+              }
+            }
+          );
+
+          if (vehicleResponse.data?.success && vehicleResponse.data?.data?.allocations) {
+            vehicles = vehicleResponse.data.data.allocations;
+          }
+        } catch (error) {
+          console.warn('⚠️ Could not fetch vehicle allocations for latest ticket:', error);
+        }
+      }
+
+      const ticketData = {
+        id: latestBooking.id,
+        verificationCode: latestBooking.verificationCode,
+        journeyDate: latestBooking.journeyDate,
+        totalAmount: latestBooking.totalAmount,
+        seatsBooked: latestBooking.seatsBooked,
+        status: latestBooking.status,
+        departureStation: latestBooking.departureStation,
+        destinationStation: latestBooking.destinationStation,
+        vehicles: vehicles,
+        etaPrediction: etaPrediction,
+        createdAt: latestBooking.createdAt,
+        paymentReference: latestBooking.paymentReference
+      };
+
+      console.log(`✅ Latest paid ticket retrieved for user ${userId}: ${latestBooking.id}`);
+      res.json({
+        success: true,
+        data: ticketData,
+        message: 'Latest paid ticket retrieved successfully'
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting latest paid ticket:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get latest paid ticket',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  }
+
+  /**
+   * POST /api/v1/central-bookings/expire-ticket/:bookingId
+   * Expire a ticket when countdown and bonus time run out
+   */
+  async expireTicket(req: Request, res: Response): Promise<void> {
+    try {
+      const { bookingId } = req.params;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+          message: 'You must be logged in to expire a ticket'
+        });
+        return;
+      }
+
+      if (!bookingId) {
+        res.status(400).json({
+          success: false,
+          error: 'Missing booking ID',
+          message: 'Booking ID is required'
+        });
+        return;
+      }
+
+      console.log(`⏰ Expiring ticket ${bookingId} for user ${userId}`);
+
+      // Find the booking and verify ownership
+      const booking = await prisma.booking.findFirst({
+        where: {
+          id: bookingId,
+          userId: userId,
+          status: {
+            in: ['PAID', 'COMPLETED'] // Only expire paid or completed tickets
+          }
+        }
+      });
+
+      if (!booking) {
+        res.status(404).json({
+          success: false,
+          error: 'Booking not found',
+          message: 'Booking not found or you do not have permission to expire it'
+        });
+        return;
+      }
+
+      // Update booking status to EXPIRED
+      await prisma.booking.update({
+        where: { id: bookingId },
+        data: {
+          status: 'EXPIRED',
+          updatedAt: new Date()
+        }
+      });
+
+      console.log(`✅ Ticket ${bookingId} expired successfully`);
+
+      // Broadcast the update to mobile apps
+      broadcastBookingUpdate('ticket_expired', {
+        bookingId: bookingId,
+        status: 'EXPIRED',
+        timestamp: new Date().toISOString()
+      });
+
+      res.json({
+        success: true,
+        data: {
+          bookingId: bookingId,
+          status: 'EXPIRED',
+          expiredAt: new Date().toISOString()
+        },
+        message: 'Ticket expired successfully'
+      });
+
+    } catch (error) {
+      console.error('❌ Error expiring ticket:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to expire ticket',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }

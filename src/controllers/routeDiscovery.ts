@@ -270,7 +270,7 @@ export class RouteDiscoveryController {
             totalAvailableSeats: responseData.data.destinations?.reduce(
               (sum: number, dest: any) => sum + (dest.totalAvailableSeats || 0), 0
             ) || 0,
-
+            basePrice: responseData.data.destinations?.[0]?.basePrice || 0,
             // Meta information
             meta: {
               isRealTime: true,
@@ -289,6 +289,7 @@ export class RouteDiscoveryController {
           totalAvailableSeats: responseData.data.destinations?.reduce(
             (sum: number, dest: any) => sum + (dest.totalAvailableSeats || 0), 0
           ) || 0,
+          basePrice: responseData.data.destinations?.[0]?.basePrice || 0,
           destinations: responseData.data.destinations || []
         });
 
@@ -401,7 +402,7 @@ export class RouteDiscoveryController {
 
         // Enhance the response with additional station info
         const queueData = responseData.data;
-        
+
         res.json({
           success: true,
           data: {
@@ -438,6 +439,18 @@ export class RouteDiscoveryController {
               queueStats: queueData.queueStats,
               priceRange: queueData.priceRange
             },
+
+            // AI-powered ETD predictions from local node
+            etaPrediction: queueData.destinationETD ? {
+                        estimatedDepartureTime: queueData.destinationETD.estimatedDepartureTime,
+          etdHours: queueData.destinationETD.etdHours,
+              confidenceLevel: queueData.destinationETD.confidenceLevel,
+              modelUsed: queueData.destinationETD.modelUsed,
+              queueVehicles: queueData.destinationETD.queueVehicles,
+              ...(queueData.destinationETD.overnightInfo && {
+                overnightInfo: queueData.destinationETD.overnightInfo
+              })
+            } : null,
 
             // Meta information
             meta: {
@@ -560,6 +573,325 @@ export class RouteDiscoveryController {
       res.status(500).json({
         success: false,
         error: 'Failed to get station status',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  }
+
+  async getOvernightDestinations(req: Request, res: Response): Promise<void> {
+    try {
+      const { stationId } = req.params;
+
+      if (!stationId) {
+        res.status(400).json({
+          success: false,
+          error: 'Station ID is required'
+        });
+        return;
+      }
+
+
+      // Get station info from database
+      const station = await prisma.station.findUnique({
+        where: { id: stationId },
+        select: {
+          id: true,
+          name: true,
+          nameAr: true,
+          localServerIp: true,
+          isActive: true,
+          isOnline: true,
+          governorate: { select: { name: true, nameAr: true } },
+          delegation: { select: { name: true, nameAr: true } }
+        }
+      });
+
+      if (!station) {
+        res.status(404).json({
+          success: false,
+          error: 'Station not found'
+        });
+        return;
+      }
+
+      if (!station.isActive) {
+        res.status(400).json({
+          success: false,
+          error: 'Station is not active'
+        });
+        return;
+      }
+
+      if (!station.localServerIp) {
+        res.status(400).json({
+          success: false,
+          error: 'Station has no local server configured'
+        });
+        return;
+      }
+
+      // Query the local node for available destinations
+      const localNodeUrl = `http://${station.localServerIp}:3001/api/public/overnight`;
+      
+      try {
+        const response = await axios.get(localNodeUrl, {
+          timeout: 8000,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Louaj-Central-Server/1.0'
+          }
+        });
+
+        const responseData = response.data as LocalNodeResponse;
+        if (!responseData.success) {
+          res.status(400).json({
+            success: false,
+            error: 'Failed to get overnight destinations from local station',
+            details: responseData.error || 'Unknown error'
+          });
+          return;
+        }
+
+        res.json({
+          success: true,
+          data: {
+            // Station information
+            station: {
+              id: station.id,
+              name: station.name,
+              nameAr: station.nameAr,
+              governorate: station.governorate.name,
+              governorateAr: station.governorate.nameAr,
+              delegation: station.delegation.name,
+              delegationAr: station.delegation.nameAr,
+              isOnline: station.isOnline
+            },
+
+            // Destinations from local node
+            destinations: responseData.data.destinations || [],
+            totalDestinations: responseData.data.destinations?.length || 0,
+            totalAvailableSeats: responseData.data.destinations?.reduce(
+              (sum: number, dest: any) => sum + (dest.totalAvailableSeats || 0), 0
+            ) || 0,
+
+            // Meta information
+            meta: {
+              isRealTime: true,
+              dataSource: 'local_node',
+              lastUpdate: responseData.data.lastUpdate || new Date().toISOString(),
+              responseTime: new Date().toISOString()
+            }
+          }
+        });
+
+        // Broadcast real-time update to mobile apps
+        broadcastRouteDiscoveryUpdate('station_destinations', {
+          stationId: station.id,
+          stationName: station.name,
+          destinationCount: responseData.data.destinations?.length || 0,
+          totalAvailableSeats: responseData.data.destinations?.reduce(
+            (sum: number, dest: any) => sum + (dest.totalAvailableSeats || 0), 0
+          ) || 0,
+          destinations: responseData.data.destinations || []
+        });
+
+      } catch (localNodeError) {
+        console.error(`❌ Error communicating with local node ${station.localServerIp}:`, localNodeError);
+        
+        res.status(503).json({
+          success: false,
+          error: 'Local station is not responding',
+          details: 'The station server is currently unavailable',
+          stationInfo: {
+            id: station.id,
+            name: station.name,
+            status: 'offline'
+          }
+        });
+      }
+
+    } catch (error) {
+      console.error('❌ Error getting overnight destinations:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get overnight destinations',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  }
+
+  async getOvernightRouteDetails(req: Request, res: Response): Promise<void> {
+    try {
+      const { departureStationId, destinationId } = req.params;
+
+      if (!departureStationId || !destinationId) {
+        res.status(400).json({
+          success: false,
+          error: 'Both departure station ID and destination ID are required'
+        });
+        return;
+      }
+
+
+      // Get departure station info
+      const departureStation = await prisma.station.findUnique({
+        where: { id: departureStationId },
+        select: {
+          id: true,
+          name: true,
+          nameAr: true,
+          localServerIp: true,
+          isActive: true,
+          governorate: { select: { name: true, nameAr: true } },
+          delegation: { select: { name: true, nameAr: true } }
+        }
+      });
+
+      if (!departureStation) {
+        res.status(404).json({
+          success: false,
+          error: 'Departure station not found'
+        });
+        return;
+      }
+
+      if (!departureStation.isActive || !departureStation.localServerIp) {
+        res.status(400).json({
+          success: false,
+          error: 'Departure station is not active or has no local server'
+        });
+        return;
+      }
+
+      // Get destination station info (for display purposes)
+      const destinationStation = await prisma.station.findUnique({
+        where: { id: destinationId },
+        select: {
+          id: true,
+          name: true,
+          nameAr: true,
+          governorate: { select: { name: true, nameAr: true } },
+          delegation: { select: { name: true, nameAr: true } }
+        }
+      });
+
+      // Query the local node for queue details
+      const localNodeUrl = `http://${departureStation.localServerIp}:3001/api/public/overnight/${destinationId}`;
+      
+      try {
+        const response = await axios.get(localNodeUrl, {
+          timeout: 10000,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Louaj-Central-Server/1.0'
+          }
+        });
+
+        const responseData = response.data as LocalNodeResponse;
+        if (!responseData.success) {
+          res.status(400).json({
+            success: false,
+            error: 'Failed to get queue information from local station',
+            details: responseData.error || 'Unknown error'
+          });
+          return;
+        }
+
+        // Enhance the response with additional station info
+        const queueData = responseData.data;
+        
+        res.json({
+          success: true,
+          data: {
+            openingTime: queueData.openingTime,
+            // Route information
+            route: {
+              departureStation: {
+                id: departureStation.id,
+                name: departureStation.name,
+                nameAr: departureStation.nameAr,
+                governorate: departureStation.governorate.name,
+                governorateAr: departureStation.governorate.nameAr,
+                delegation: departureStation.delegation.name,
+                delegationAr: departureStation.delegation.nameAr
+              },
+              destinationStation: destinationStation ? {
+                id: destinationStation.id,
+                name: destinationStation.name,
+                nameAr: destinationStation.nameAr,
+                governorate: destinationStation.governorate.name,
+                governorateAr: destinationStation.governorate.nameAr,
+                delegation: destinationStation.delegation.name,
+                delegationAr: destinationStation.delegation.nameAr
+              } : {
+                id: destinationId,
+                name: queueData.destinationName || 'Unknown Destination'
+              }
+            },
+
+            // Queue data from local node
+            queue: {
+              vehicles: queueData.vehicles,
+              totalVehicles: queueData.totalVehicles,
+              totalAvailableSeats: queueData.totalAvailableSeats,
+              queueStats: queueData.queueStats,
+              priceRange: queueData.priceRange
+            },
+
+            // AI-powered ETA predictions from local node for overnight routes
+            etaPrediction: queueData.destinationETD ? {
+                        estimatedDepartureTime: queueData.destinationETD.estimatedDepartureTime,
+          etdHours: queueData.destinationETD.etdHours,
+              confidenceLevel: queueData.destinationETD.confidenceLevel,
+              modelUsed: queueData.destinationETD.modelUsed,
+              queueVehicles: queueData.destinationETD.queueVehicles,
+              ...(queueData.destinationETD.overnightInfo && {
+                overnightInfo: queueData.destinationETD.overnightInfo
+              })
+            } : null,
+
+            // Meta information
+            meta: {
+              isRealTime: true,
+              dataSource: 'local_node',
+              lastUpdate: queueData.lastUpdate,
+              responseTime: new Date().toISOString()
+            }
+          }
+        });
+
+        // Broadcast real-time route details update to mobile apps
+        broadcastRouteDiscoveryUpdate('route_details', {
+          departureStationId: departureStation.id,
+          departureStationName: departureStation.name,
+          destinationId: destinationId,
+          destinationName: destinationStation?.name || queueData.destinationName,
+          totalVehicles: queueData.totalVehicles,
+          totalAvailableSeats: queueData.totalAvailableSeats,
+          queueStats: queueData.queueStats,
+          priceRange: queueData.priceRange
+        });
+
+      } catch (localNodeError) {
+        console.error(`❌ Error communicating with local node ${departureStation.localServerIp}:`, localNodeError);
+        
+        res.status(503).json({
+          success: false,
+          error: 'Local station is not responding',
+          details: 'The departure station server is currently unavailable',
+          stationInfo: {
+            id: departureStation.id,
+            name: departureStation.name,
+            status: 'offline'
+          }
+        });
+      }
+
+    } catch (error) {
+      console.error('❌ Error getting route details:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get route details',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }

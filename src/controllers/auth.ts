@@ -1,6 +1,48 @@
 import { Request, Response } from 'express';
 import { authService } from '../services/auth';
 
+
+
+export const config = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const {cin} = req.body;
+
+    if (!cin) {
+      res.status(400).json({
+        success: false,
+        message: 'CIN is required',
+        code: 'MISSING_FIELDS'
+      });
+      return;
+    }
+
+    const result = await authService.config(cin);
+
+    if (!result.success) {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+        code: 'CONFIG_FAILED'
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: 'Config retrieved successfully',
+      data: result.data
+    });
+  } catch (error: any) {
+    console.error('❌ Config retrieval error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve config',
+      code: 'INTERNAL_ERROR'
+    });
+  }
+};
+
+
 /**
  * Create a new admin account (no auth required - for initial setup)
  * POST /api/v1/auth/register/admin

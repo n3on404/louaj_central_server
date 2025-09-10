@@ -17,6 +17,18 @@ const router = Router();
 router.post('/create', authenticateUser, centralBookingController.createBooking.bind(centralBookingController));
 
 /**
+ * @route POST /api/v1/central-bookings/overnight
+ * @desc Create an overnight booking
+ * @access Private (Requires authentication)
+ * @body {
+ *   departureStationId: string,
+ *   destinationId: string,
+ *   numberOfSeats: number
+ * }
+ */
+router.post('/overnight', authenticateUser, centralBookingController.createOvernightBooking.bind(centralBookingController));
+
+/**
  * @route GET /api/v1/bookings/user/:userId
  * @desc Get all bookings for a specific user
  * @access Private (Requires authentication, user can only view own bookings)
@@ -57,6 +69,13 @@ router.get('/debug/payment/:paymentRef', centralBookingController.debugPaymentSt
 router.get('/booking-details/:paymentRef', centralBookingController.getBookingDetails.bind(centralBookingController));
 
 /**
+ * @route GET /api/v1/central-bookings/latest-paid-ticket
+ * @desc Get the latest paid ticket for the authenticated user
+ * @access Private (Requires authentication)
+ */
+router.get('/latest-paid-ticket', authenticateUser, centralBookingController.getLatestPaidTicket.bind(centralBookingController));
+
+/**
  * @route GET /api/v1/central-bookings/webhook/payment
  * @desc Handle payment webhook from Konnect
  * @access Public (webhook from payment gateway)
@@ -64,6 +83,14 @@ router.get('/booking-details/:paymentRef', centralBookingController.getBookingDe
  */
 router.get('/webhook/payment', centralBookingController.handlePaymentWebhook.bind(centralBookingController));
 
+
+/**
+ * @route POST /api/v1/central-bookings/expire-ticket/:bookingId
+ * @desc Expire a ticket when countdown and bonus time run out
+ * @access Private (Requires authentication)
+ * @param {string} bookingId - The booking ID to expire
+ */
+router.post('/expire-ticket/:bookingId', authenticateUser, centralBookingController.expireTicket.bind(centralBookingController));
 
 /**
  * @route GET /api/v1/central-bookings/webhook/verify/:paymentId
