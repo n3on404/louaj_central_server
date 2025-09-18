@@ -510,8 +510,18 @@ export class RouteService {
           isActive: true
         },
         include: {
-          departureStation: true,
-          destinationStation: true
+          departureStation: {
+            include: {
+              governorate: true,
+              delegation: true
+            }
+          },
+          destinationStation: {
+            include: {
+              governorate: true,
+              delegation: true
+            }
+          }
         },
         orderBy: [
           {
@@ -527,14 +537,18 @@ export class RouteService {
         ]
       });
 
-      // Create a simple array with station_id, station_name, and base_price
+      // Create a simple array with station_id, station_name, base_price, governorate, and delegation
       const connectedStations = routes.map(route => {
         // If the searched station is the departure, return the destination station
         if (route.departureStationId === stationId) {
           return {
             station_id: route.destinationStation.id,
             station_name: route.destinationStation.name,
-            base_price: Number(route.basePrice)
+            base_price: Number(route.basePrice),
+            governorate: route.destinationStation.governorate.name,
+            governorate_ar: route.destinationStation.governorate.nameAr,
+            delegation: route.destinationStation.delegation.name,
+            delegation_ar: route.destinationStation.delegation.nameAr
           };
         }
         // If the searched station is the destination, return the departure station
@@ -542,7 +556,11 @@ export class RouteService {
           return {
             station_id: route.departureStation.id,
             station_name: route.departureStation.name,
-            base_price: Number(route.basePrice)
+            base_price: Number(route.basePrice),
+            governorate: route.departureStation.governorate.name,
+            governorate_ar: route.departureStation.governorate.nameAr,
+            delegation: route.departureStation.delegation.name,
+            delegation_ar: route.departureStation.delegation.nameAr
           };
         }
       });
