@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { prisma } from '../lib/database';
+import { instantSyncService } from '../services/instantSyncService';
 
 export const getAllStaff = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -171,6 +172,15 @@ export const createStaff = async (req: Request, res: Response): Promise<void> =>
       }
     });
 
+    // Trigger instant sync to local node
+    try {
+      await instantSyncService.syncStaff('CREATE', newStaff, userStationId);
+      console.log(`📡 Staff creation sync triggered for station ${userStationId}: ${newStaff.firstName} ${newStaff.lastName}`);
+    } catch (syncError) {
+      console.error('❌ Error syncing staff creation:', syncError);
+      // Don't fail the request if sync fails
+    }
+
     res.status(201).json({
       success: true,
       message: 'Staff member created successfully',
@@ -235,6 +245,15 @@ export const updateStaff = async (req: Request, res: Response): Promise<void> =>
         updatedAt: true
       }
     });
+
+    // Trigger instant sync to local node
+    try {
+      await instantSyncService.syncStaff('UPDATE', updatedStaff, updatedStaff.stationId || undefined);
+      console.log(`📡 Staff update sync triggered for station ${updatedStaff.stationId}: ${updatedStaff.firstName} ${updatedStaff.lastName}`);
+    } catch (syncError) {
+      console.error('❌ Error syncing staff update:', syncError);
+      // Don't fail the request if sync fails
+    }
 
     res.json({
       success: true,

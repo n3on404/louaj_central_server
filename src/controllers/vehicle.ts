@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { vehicleService } from '../services/vehicle';
 import { prisma } from '../config/database';
+import { instantSyncService } from '../services/instantSyncService';
 
 /**
  * Controller for vehicle management and driver requests
@@ -140,6 +141,25 @@ export class VehicleController {
         supervisorId,
         approved: true
       });
+
+      // Trigger instant sync to local nodes for the approved vehicle
+      try {
+        if (result.driver?.vehicle) {
+          // Get authorized stations for this vehicle
+          const authorizedStations = await prisma.vehicleAuthorizedStation.findMany({
+            where: { vehicleId: result.driver.vehicle.id },
+            select: { stationId: true }
+          });
+          
+          const authorizedStationIds = authorizedStations.map(auth => auth.stationId);
+          
+          await instantSyncService.syncVehicle('CREATE', result.driver.vehicle, authorizedStationIds);
+          console.log(`📡 Vehicle approval sync triggered for stations: ${authorizedStationIds.join(', ')}`);
+        }
+      } catch (syncError) {
+        console.error('❌ Error syncing vehicle approval:', syncError);
+        // Don't fail the request if sync fails
+      }
 
       res.json({
         success: true,

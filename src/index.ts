@@ -7,6 +7,7 @@ import { createServer } from 'http';
 import { CentralWebSocketServer } from './websocket/WebSocketServer';
 import { testDatabaseConnection, disconnectDatabase } from './config/database';
 import { routeDiscoveryService } from './services/routeDiscovery';
+import { instantSyncService } from './services/instantSyncService';
 
 // Load environment variables
 dotenv.config();
@@ -209,6 +210,10 @@ httpServer.listen(PORT, () => {
   console.log(`API Documentation: http://localhost:${PORT}/api/v1`);
   console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  
+  // Initialize instant sync service with WebSocket server
+  instantSyncService.setWebSocketServer(wsServer);
+  console.log('✅ Instant sync service initialized');
   
   // Setup route discovery service events
   routeDiscoveryService.on('station_online', (station) => {

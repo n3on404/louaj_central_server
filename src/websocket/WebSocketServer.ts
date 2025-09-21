@@ -26,7 +26,9 @@ export interface WebSocketMessage {
         // Vehicle sync message types
         'vehicle_sync_full' | 'vehicle_sync_update' | 'vehicle_sync_delete' | 'vehicle_sync_ack' | 'vehicle_sync_error' |
         // Real-time booking and seat availability message types
-        'seat_availability_request' | 'seat_availability_response' | 'booking_created' | 'booking_payment_updated' | 'booking_cancelled';
+        'seat_availability_request' | 'seat_availability_response' | 'booking_created' | 'booking_payment_updated' | 'booking_cancelled' |
+        // Instant sync message types
+        'instant_sync' | 'instant_sync_ack';
   payload?: any;
   timestamp: number;
   messageId?: string;
@@ -177,6 +179,10 @@ export class CentralWebSocketServer extends EventEmitter {
 
         case 'seat_availability_response':
           await this.handleSeatAvailabilityResponse(clientId, message.payload);
+          break;
+
+        case 'instant_sync_ack':
+          await this.handleInstantSyncAck(clientId, message.payload);
           break;
 
         default:
@@ -1058,6 +1064,33 @@ export class CentralWebSocketServer extends EventEmitter {
       data: payload.data,
       error: payload.error,
       timestamp: payload.timestamp
+    });
+  }
+
+  /**
+   * Handle instant sync acknowledgment from local node
+   */
+  private async handleInstantSyncAck(clientId: string, payload: any): Promise<void> {
+    const client = this.clients.get(clientId);
+    if (!client || !client.authenticated) return;
+
+    const { syncId, dataType, operation, success, error } = payload;
+    
+    if (success) {
+      console.log(`✅ Instant sync acknowledged by ${client.stationName}: ${dataType} ${operation} (${syncId})`);
+    } else {
+      console.error(`❌ Instant sync failed at ${client.stationName}: ${dataType} ${operation} (${syncId}) - ${error}`);
+    }
+    
+    // Forward acknowledgment to instant sync service
+    const { instantSyncService } = await import('../services/instantSyncService');
+    instantSyncService.handleSyncAck({
+      type: 'instant_sync_ack',
+      syncId,
+      success,
+      error,
+      dataType,
+      operation
     });
   }
 

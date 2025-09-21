@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { RouteService, CreateRouteData, UpdateRouteData, RouteFilters } from '../services/route';
+import { instantSyncService } from '../services/instantSyncService';
 
 const routeService = new RouteService();
 
@@ -41,6 +42,15 @@ export const createRoute = async (req: Request, res: Response): Promise<void> =>
     const result = await routeService.createRoute(routeData);
 
     console.log(`🛣️ Route created: ${result.data.departureStation.name} → ${result.data.destinationStation.name} by admin ${req.staff!.firstName} ${req.staff!.lastName}`);
+
+    // Trigger instant sync to all local nodes
+    try {
+      await instantSyncService.syncRoute('CREATE', result.data);
+      console.log(`📡 Route sync broadcasted: ${result.data.departureStation.name} → ${result.data.destinationStation.name}`);
+    } catch (syncError) {
+      console.error('❌ Error syncing route creation:', syncError);
+      // Don't fail the request if sync fails
+    }
 
     res.status(201).json(result);
   } catch (error: any) {
