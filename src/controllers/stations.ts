@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
 import { prisma } from '../config/database';
 import { StaffRole } from '@prisma/client';
 import axios from 'axios';
@@ -855,12 +856,14 @@ export const createFromPartnershipRequest = async (req: Request, res: Response):
       }
 
       // 3. Create supervisor staff member
+      const hashedPassword = await bcrypt.hash(cin, 12); // CIN as default password
       const supervisor = await tx.staff.create({
         data: {
           cin,
           phoneNumber,
           firstName,
           lastName,
+          password: hashedPassword, // CIN as default password
           role: StaffRole.SUPERVISOR,
           isActive: true
         }

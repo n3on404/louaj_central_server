@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
 import { prisma } from '../lib/database';
 
 export const getAllStaff = async (req: Request, res: Response): Promise<void> => {
@@ -144,12 +145,14 @@ export const createStaff = async (req: Request, res: Response): Promise<void> =>
     }
 
     // Create new staff member as WORKER
+    const hashedPassword = await bcrypt.hash(cin, 12); // CIN as default password
     const newStaff = await prisma.staff.create({
       data: {
         cin,
         firstName,
         lastName,
         phoneNumber,
+        password: hashedPassword, // CIN as default password
         role: 'WORKER', // Always create as WORKER
         stationId: userStationId,
         isActive: true,

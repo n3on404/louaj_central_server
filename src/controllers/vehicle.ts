@@ -18,9 +18,7 @@ export class VehicleController {
 
       // Validate required fields
       const requiredFields = [
-        'cin', 'phoneNumber', 'firstName', 'lastName',
-        'originGovernorateId', 'originDelegationId',
-        'licensePlate', 'capacity', 'authorizedStationIds'
+        'cin', 'licensePlate', 'authorizedStationIds'
       ];
 
       for (const field of requiredFields) {

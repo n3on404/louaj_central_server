@@ -69,6 +69,7 @@ model Station {
   longitude       Float?
   localServerIp   String?     @map("local_server_ip")
   supervisorId    String?     @unique @map("supervisor_id") // One supervisor per station
+  serviceFee      Decimal     @default(0.200) @map("service_fee") @db.Decimal(10, 3)
   isActive        Boolean     @default(true) @map("is_active")
   isOnline        Boolean     @default(true) @map("is_online")
   lastHeartbeat   DateTime?   @map("last_heartbeat")
@@ -103,6 +104,7 @@ model Staff {
   phoneNumber   String     @map("phone_number")
   firstName     String     @map("first_name")
   lastName      String     @map("last_name")
+  password      String     // Hashed password
   role          StaffRole  @default(WORKER)
   stationId     String?    @map("station_id") // Optional for ADMIN role
   isActive      Boolean    @default(true) @map("is_active")
@@ -130,11 +132,8 @@ enum StaffRole {
 model Driver {
   id              String            @id @default(cuid())
   cin             String            @unique
-  phoneNumber     String            @map("phone_number")
-  firstName       String            @map("first_name")
-  lastName        String            @map("last_name")
   
-  // Origin location info
+  // Origin location info - Always Monastir
   originGovernorateId String        @map("origin_governorate_id")
   originDelegationId  String        @map("origin_delegation_id")
   originAddress       String?       @map("origin_address")
@@ -175,10 +174,7 @@ enum DriverStatus {
 model Vehicle {
   id              String            @id @default(cuid())
   licensePlate    String            @unique @map("license_plate")
-  capacity        Int
-  model           String?
-  year            Int?
-  color           String?
+  capacity        Int               @default(8)
   
   // Vehicle status
   isActive        Boolean           @default(false) @map("is_active") // Only active after driver approval

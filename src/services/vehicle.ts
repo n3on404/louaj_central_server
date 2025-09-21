@@ -2,21 +2,13 @@ import { prisma } from '../config/database';
 import { CentralWebSocketServer } from '../websocket/WebSocketServer';
 
 export interface DriverVehicleRequest {
-  // Driver info
+  // Driver info - simplified
   cin: string;
-  phoneNumber: string;
-  firstName: string;
-  lastName: string;
-  originGovernorateId: string;
-  originDelegationId: string;
   originAddress?: string;
 
-  // Vehicle info
+  // Vehicle info - simplified
   licensePlate: string;
-  capacity: number;
-  model?: string;
-  year?: number;
-  color?: string;
+  capacity?: number; // Defaults to 8
 
   // Authorized stations - stations this vehicle can work between
   authorizedStationIds: string[];
@@ -32,6 +24,43 @@ export interface VehicleApprovalData {
  * Service class for handling vehicles and driver requests
  */
 export class VehicleService {
+
+  /**
+   * Find Monastir governorate and delegation IDs
+   */
+  async findMonastirIds() {
+    const governorate = await prisma.governorate.findFirst({
+      where: {
+        OR: [
+          { name: 'MONASTIR' },
+          { nameAr: 'المنستير' }
+        ]
+      }
+    });
+
+    if (!governorate) {
+      throw new Error('Monastir governorate not found in database');
+    }
+
+    const delegation = await prisma.delegation.findFirst({
+      where: {
+        governorateId: governorate.id,
+        OR: [
+          { name: 'MONASTIR' },
+          { nameAr: 'المنستير' }
+        ]
+      }
+    });
+
+    if (!delegation) {
+      throw new Error('Monastir delegation not found in database');
+    }
+
+    return {
+      governorateId: governorate.id,
+      delegationId: delegation.id
+    };
+  }
 
   /**
    * Find the closest station to given governorate/delegation
@@ -104,14 +133,17 @@ export class VehicleService {
       throw new Error('One or more authorized stations are invalid or inactive');
     }
 
-    // Find closest station for driver assignment
+    // Automatically find Monastir governorate and delegation IDs
+    const monastirIds = await this.findMonastirIds();
+
+    // Find closest station for driver assignment (using Monastir delegation)
     const assignedStation = await this.findClosestStation(
-      requestData.originGovernorateId,
-      requestData.originDelegationId
+      monastirIds.governorateId,
+      monastirIds.delegationId
     );
 
     if (!assignedStation) {
-      throw new Error('No active station found for this location');
+      throw new Error('No active station found for Monastir location');
     }
 
     // Create vehicle with authorized stations in a transaction
@@ -120,10 +152,7 @@ export class VehicleService {
       const vehicle = await tx.vehicle.create({
         data: {
           licensePlate: requestData.licensePlate,
-          capacity: requestData.capacity,
-          model: requestData.model || null,
-          year: requestData.year || null,
-          color: requestData.color || null,
+          capacity: requestData.capacity || 8,
           isActive: false, // Will be activated after approval
           isAvailable: false
         }
@@ -143,11 +172,8 @@ export class VehicleService {
       const driver = await tx.driver.create({
         data: {
           cin: requestData.cin,
-          phoneNumber: requestData.phoneNumber,
-          firstName: requestData.firstName,
-          lastName: requestData.lastName,
-          originGovernorateId: requestData.originGovernorateId,
-          originDelegationId: requestData.originDelegationId,
+          originGovernorateId: monastirIds.governorateId,
+          originDelegationId: monastirIds.delegationId,
           originAddress: requestData.originAddress || null,
           assignedStationId: assignedStation.id,
           vehicleId: vehicle.id,

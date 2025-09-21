@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { vehicleController } from '../controllers/vehicle';
-import { authenticate, requireAdmin, requireSupervisor, validateCIN, validatePhoneNumber } from '../middleware/auth';
+import { authenticate, requireAdmin, requireSupervisor, validateCIN } from '../middleware/auth';
 
 const router = Router();
 
@@ -13,7 +13,6 @@ const router = Router();
  */
 router.post('/request', 
   validateCIN,
-  validatePhoneNumber,
   vehicleController.submitDriverRequest.bind(vehicleController)
 );
 

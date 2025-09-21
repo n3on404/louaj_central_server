@@ -202,64 +202,29 @@ export const createWorker = async (req: Request, res: Response): Promise<void> =
 };
 
 /**
- * Initiate login process - send SMS verification code
- * POST /api/v1/auth/login/start
+ * Login with CIN and password
+ * POST /api/v1/auth/login
  */
-export const startLogin = async (req: Request, res: Response): Promise<void> => {
+export const login = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { cin } = req.body;
+    const { cin, password } = req.body;
 
-    const result = await authService.initiateLogin(cin);
+    if (!cin || !password) {
+      res.status(400).json({
+        success: false,
+        message: 'CIN and password are required',
+        code: 'MISSING_FIELDS'
+      });
+      return;
+    }
+
+    const result = await authService.login(cin, password);
 
     if (!result.success) {
       res.status(400).json({
         success: false,
         message: result.message,
         code: 'LOGIN_FAILED'
-      });
-      return;
-    }
-
-    // Don't expose verification SID to client for security
-    res.json({
-      success: true,
-      message: result.message,
-      data: result.data
-    });
-  } catch (error: any) {
-    console.error('❌ Login start error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to initiate login',
-      code: 'INTERNAL_ERROR'
-    });
-  }
-};
-
-/**
- * Complete login process - verify SMS code and create session
- * POST /api/v1/auth/login/verify
- */
-export const verifyLogin = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { cin, verificationCode } = req.body;
-
-    if (!cin || !verificationCode) {
-      res.status(400).json({
-        success: false,
-        message: 'CIN and verification code are required',
-        code: 'MISSING_FIELDS'
-      });
-      return;
-    }
-
-    const result = await authService.verifyLogin(cin, verificationCode);
-
-    if (!result.success) {
-      res.status(400).json({
-        success: false,
-        message: result.message,
-        code: 'VERIFICATION_FAILED'
       });
       return;
     }
@@ -272,10 +237,74 @@ export const verifyLogin = async (req: Request, res: Response): Promise<void> =>
       data: result.data
     });
   } catch (error: any) {
-    console.error('❌ Login verification error:', error);
+    console.error('❌ Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to verify login',
+      message: 'Failed to login',
+      code: 'INTERNAL_ERROR'
+    });
+  }
+};
+
+/**
+ * Change staff password
+ * POST /api/v1/auth/change-password
+ */
+export const changePassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const staffId = (req as any).staff?.id;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!staffId) {
+      res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+        code: 'AUTH_REQUIRED'
+      });
+      return;
+    }
+
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({
+        success: false,
+        message: 'Current password and new password are required',
+        code: 'MISSING_PASSWORDS'
+      });
+      return;
+    }
+
+    // Validate new password strength
+    if (newPassword.length < 6) {
+      res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long',
+        code: 'WEAK_PASSWORD'
+      });
+      return;
+    }
+
+    const result = await authService.changePassword(staffId, currentPassword, newPassword);
+
+    if (!result.success) {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+        code: 'PASSWORD_CHANGE_FAILED'
+      });
+      return;
+    }
+
+    console.log(`🔒 Password changed for staff: ${staffId}`);
+
+    res.json({
+      success: true,
+      message: result.message
+    });
+  } catch (error: any) {
+    console.error('❌ Change password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to change password',
       code: 'INTERNAL_ERROR'
     });
   }
@@ -328,12 +357,11 @@ export const testSMS = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const result = await authService.testSMS(phoneNumber);
-
-    res.json({
-      success: result.success,
-      message: result.message,
-      data: result.sid ? { sid: result.sid } : undefined
+    // SMS testing removed - using password authentication now
+    res.status(400).json({
+      success: false,
+      message: 'SMS testing is no longer available. Use password authentication.',
+      code: 'SMS_DISABLED'
     });
   } catch (error: any) {
     console.error('❌ SMS test error:', error);

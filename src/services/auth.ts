@@ -1,16 +1,9 @@
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 import { prisma } from '../config/database';
 import { StaffRole } from '@prisma/client';
-import { twilioService, TwilioService } from './twilio';
 
 interface LoginResponse {
-  success: boolean;
-  message: string;
-  verificationSid?: string;
-  data?: any;
-}
-
-interface VerifyLoginResponse {
   success: boolean;
   message: string;
   data?: {
@@ -37,6 +30,7 @@ interface TokenPayload {
 
 class AuthService {
   private jwtSecret: string;
+  private saltRounds: number = 12;
   private sessionDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
 
   constructor() {
@@ -45,6 +39,13 @@ class AuthService {
     if (!process.env.JWT_SECRET) {
       console.warn('⚠️  Using default JWT secret. Set JWT_SECRET in production!');
     }
+  }
+
+  /**
+   * Hash CIN to use as default password
+   */
+  private async hashCinPassword(cin: string): Promise<string> {
+    return await bcrypt.hash(cin, this.saltRounds);
   }
 
   /**
@@ -72,12 +73,14 @@ class AuthService {
       }
 
       // Create admin (no station required)
+      const hashedPassword = await this.hashCinPassword(cin);
       const admin = await prisma.staff.create({
         data: {
           cin,
-          phoneNumber: TwilioService.formatTunisianPhoneNumber(phoneNumber),
+          phoneNumber: phoneNumber,
           firstName,
           lastName,
+          password: hashedPassword, // CIN as default password
           role: StaffRole.ADMIN,
           stationId: null, // Admins are not tied to a specific station
           isActive: true
@@ -148,12 +151,14 @@ class AuthService {
       }
 
              // Create supervisor
+       const hashedPassword = await this.hashCinPassword(cin);
        const supervisor = await prisma.staff.create({
          data: {
            cin,
-           phoneNumber: TwilioService.formatTunisianPhoneNumber(phoneNumber),
+           phoneNumber: phoneNumber,
            firstName,
            lastName,
+           password: hashedPassword, // CIN as default password
            role: StaffRole.SUPERVISOR,
            stationId,
            isActive: true
@@ -246,12 +251,14 @@ class AuthService {
       }
 
              // Create worker
+       const hashedPassword = await this.hashCinPassword(cin);
        const worker = await prisma.staff.create({
          data: {
            cin,
-           phoneNumber: TwilioService.formatTunisianPhoneNumber(phoneNumber),
+           phoneNumber: phoneNumber,
            firstName,
            lastName,
+           password: hashedPassword, // CIN as default password
            role: StaffRole.WORKER,
            stationId,
            isActive: true,
@@ -297,11 +304,11 @@ class AuthService {
   }
 
   /**
-   * Initiate login process - send SMS verification
+   * Login with CIN and password
    */
-  async initiateLogin(cin: string): Promise<LoginResponse> {
+  async login(cin: string, password: string): Promise<LoginResponse> {
     try {
-      console.log(`🔐 Initiating login for CIN: ${cin}`);
+      console.log(`🔐 Attempting login for CIN: ${cin}`);
 
       // Find staff member
       const staff = await prisma.staff.findUnique({
@@ -319,7 +326,7 @@ class AuthService {
       if (!staff) {
         return {
           success: false,
-          message: 'Staff member not found with this CIN'
+          message: 'Invalid CIN or password'
         };
       }
 
@@ -330,66 +337,21 @@ class AuthService {
         };
       }
 
-      // Send SMS verification
-      const verificationSid = await twilioService.sendVerificationCode(staff.phoneNumber);
+      // Verify password
+      const isValidPassword = await bcrypt.compare(password, staff.password);
 
-      console.log(`✅ SMS verification sent to ${staff.firstName} ${staff.lastName} (${staff.phoneNumber})`);
+      if (!isValidPassword) {
+        return {
+          success: false,
+          message: 'Invalid CIN or password'
+        };
+      }
 
-      return {
-        success: true,
-        message: `SMS verification code sent to ${staff.phoneNumber}`,
-        verificationSid,
-        data: {
-          firstName: staff.firstName,
-          lastName: staff.lastName,
-          station: staff.station?.name || 'No Station Assigned'
-        }
-      };
-    } catch (error: any) {
-      console.error('❌ Login initiation error:', error);
-      return {
-        success: false,
-        message: 'Failed to send verification code. Please try again.'
-      };
-    }
-  }
-
-  /**
-   * Complete login process - verify SMS code and create session
-   */
-  async verifyLogin(cin: string, verificationCode: string): Promise<VerifyLoginResponse> {
-    try {
-      console.log(`🔍 Verifying login for CIN: ${cin}`);
-
-      // Find staff member again
-      const staff = await prisma.staff.findUnique({
-        where: { cin },
-        include: {
-          station: {
-            include: {
-              governorate: true,
-              delegation: true
-            }
-          }
-        }
+      // Update last login time
+      await prisma.staff.update({
+        where: { id: staff.id },
+        data: { updatedAt: new Date() }
       });
-
-      if (!staff || !staff.isActive) {
-        return {
-          success: false,
-          message: 'Staff member not found or account is deactivated'
-        };
-      }
-
-      // Verify SMS code
-      const verificationResult = await twilioService.verifyCode(staff.phoneNumber, verificationCode);
-
-      if (!verificationResult.valid || verificationResult.status !== 'approved') {
-        return {
-          success: false,
-          message: 'Invalid verification code. Please try again.'
-        };
-      }
 
       // Create JWT token
       const tokenPayload: TokenPayload = {
@@ -429,10 +391,10 @@ class AuthService {
         }
       };
     } catch (error: any) {
-      console.error('❌ Login verification error:', error);
+      console.error('❌ Login error:', error);
       return {
         success: false,
-        message: 'Failed to verify login. Please try again.'
+        message: 'Login failed. Please try again.'
       };
     }
   }
@@ -486,22 +448,55 @@ class AuthService {
   }
 
   /**
-   * Test SMS service
+   * Change staff password
    */
-     async testSMS(phoneNumber: string): Promise<{ success: boolean; message: string; sid?: string }> {
-     try {
-       const formattedPhone = TwilioService.formatTunisianPhoneNumber(phoneNumber);
-       const sid = await twilioService.sendVerificationCode(formattedPhone);
-      
+  async changePassword(staffId: string, currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+    try {
+      console.log(`🔒 Changing password for staff: ${staffId}`);
+
+      // Get staff with current password
+      const staff = await prisma.staff.findUnique({
+        where: { id: staffId }
+      });
+
+      if (!staff) {
+        return {
+          success: false,
+          message: 'Staff member not found'
+        };
+      }
+
+      // Verify current password
+      const isValidPassword = await bcrypt.compare(currentPassword, staff.password);
+
+      if (!isValidPassword) {
+        return {
+          success: false,
+          message: 'Current password is incorrect'
+        };
+      }
+
+      // Hash new password
+      const hashedNewPassword = await bcrypt.hash(newPassword, this.saltRounds);
+
+      // Update password
+      await prisma.staff.update({
+        where: { id: staffId },
+        data: { password: hashedNewPassword }
+      });
+
+      console.log(`✅ Password changed successfully for staff: ${staffId}`);
+
       return {
         success: true,
-        message: `Test SMS sent successfully to ${formattedPhone}`,
-        sid
+        message: 'Password changed successfully'
       };
+
     } catch (error: any) {
+      console.error('❌ Error changing password:', error);
       return {
         success: false,
-        message: `Failed to send test SMS: ${error.message}`
+        message: 'Failed to change password'
       };
     }
   }
@@ -546,4 +541,4 @@ class AuthService {
 // Export singleton instance
 export const authService = new AuthService();
 export { AuthService };
-export type { LoginResponse, VerifyLoginResponse, CreateStaffResponse, TokenPayload }; 
+export type { LoginResponse, CreateStaffResponse, TokenPayload }; 

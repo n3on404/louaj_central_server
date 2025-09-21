@@ -542,11 +542,11 @@ export class CentralWebSocketServer extends EventEmitter {
         return;
       }
 
-      // Import authService here to avoid circular dependency
-      const { authService } = await import('../services/auth');
-
-      // Call the existing initiate login service
-      const result = await authService.initiateLogin(cin);
+      // Password-based login not supported via WebSocket
+      const result = {
+        success: false,
+        message: 'Password-based login must be done via HTTP API'
+      };
 
       console.log(`🔐 Staff login request via WebSocket from station ${client.stationName} for CIN: ${cin}`);
 
@@ -603,11 +603,11 @@ export class CentralWebSocketServer extends EventEmitter {
         return;
       }
 
-      // Import authService here to avoid circular dependency
-      const { authService } = await import('../services/auth');
-
-      // Call the existing verify login service
-      const result = await authService.verifyLogin(cin, verificationCode);
+      // SMS verification no longer supported
+      const result = {
+        success: false,
+        message: 'SMS verification is no longer supported. Use password-based login via HTTP API'
+      };
 
       console.log(`🔍 Staff verification request via WebSocket from station ${client.stationName} for CIN: ${cin}`);
 
@@ -904,9 +904,6 @@ export class CentralWebSocketServer extends EventEmitter {
             select: {
               id: true,
               cin: true,
-              phoneNumber: true,
-              firstName: true,
-              lastName: true,
               originGovernorateId: true,
               originDelegationId: true,
               originAddress: true,
@@ -992,9 +989,6 @@ export class CentralWebSocketServer extends EventEmitter {
               select: {
                 id: true,
                 cin: true,
-                phoneNumber: true,
-                firstName: true,
-                lastName: true,
                 originGovernorateId: true,
                 originDelegationId: true,
                 originAddress: true,

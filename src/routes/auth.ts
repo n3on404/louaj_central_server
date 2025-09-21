@@ -3,10 +3,9 @@ import {
   createAdmin,
   createSupervisor,
   createWorker,
-  startLogin,
-  verifyLogin,
+  login,
+  changePassword,
   getProfile,
-  testSMS,
   refreshToken,
   logout,
   config
@@ -62,21 +61,22 @@ router.post('/register/worker',
 // =============== LOGIN FLOW ===============
 
 /**
- * Start login process - send SMS verification
- * POST /api/v1/auth/login/start
+ * Login with CIN and password
+ * POST /api/v1/auth/login
  */
-router.post('/login/start',
+router.post('/login',
   validateCIN,
-  startLogin
+  login
 );
 
 /**
- * Complete login - verify SMS code and get token
- * POST /api/v1/auth/login/verify
+ * Change password
+ * POST /api/v1/auth/change-password
  */
-router.post('/login/verify',
-  validateCIN,
-  verifyLogin
+router.post('/change-password',
+  authenticate,
+  requireStaff,
+  changePassword
 );
 
 // =============== AUTHENTICATED ROUTES ===============
@@ -131,7 +131,6 @@ router.post('/config',
 if (process.env.NODE_ENV === 'development' || process.env.ALLOW_SMS_TEST === 'true') {
   router.post('/test-sms',
     validatePhoneNumber,
-    testSMS
   );
 }
 
